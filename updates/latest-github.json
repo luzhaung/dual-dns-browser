@@ -1,0 +1,11 @@
+{
+  "version": "1.1.1",
+  "published_at": "2026-11-05T02:43:44.107Z",
+  "notes": "完成隐私与安全清理，功能保持不变。\n\n移除了文档中的示例业务域名，并清理了代理程序中未使用的预发布环境配置。\n\n安装包不再包含开发机路径；更新发布流程已加入路径重映射，后续构建也会自动执行同样的清理。\n\n覆盖安装会保留 DNS 配置和两个浏览器的登录状态；当前安装包未做代码签名，因此应用内只负责检查与跳转下载，不会静默安装。",
+  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.1.1",
+  "downloads": {
+    "macos-aarch64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.1.1/DualDNS-Browser-1.1.1-macOS-AppleSilicon.dmg",
+    "macos-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.1.1/DualDNS-Browser-1.1.1-macOS-Intel.dmg",
+    "windows-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.1.1/DualDNS-Browser-1.1.1-Windows-x64-Setup.exe"
+  }
+}

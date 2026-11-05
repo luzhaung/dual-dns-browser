@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>DualDNS Browser</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="ambient ambient-a"></div>
+    <div class="ambient ambient-b"></div>
+
+    <main class="app">
+      <div class="top-actions">
+        <button
+          class="version-button"
+          id="updateBtn"
+          type="button"
+          aria-label="检查更新"
+          aria-haspopup="dialog"
+          aria-controls="updateModal"
+          title="检查更新"
+        >
+          <span class="version-dot" id="versionDot"></span>
+          <span id="versionLabel">v1.1.1</span>
+          <svg class="version-refresh" viewBox="0 0 16 16" aria-hidden="true">
+            <path
+              d="M13 8a5 5 0 1 1-1.46-3.54M13 3v3.2H9.8"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.35"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
+
+        <button
+          class="help-button"
+          id="helpBtn"
+          type="button"
+          aria-label="打开使用说明与常见问题"
+          aria-haspopup="dialog"
+          aria-controls="helpModal"
+          title="使用说明与常见问题"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.7" />
+            <path
+              d="M9.6 9.2a2.55 2.55 0 0 1 4.95.9c0 1.72-2.55 2.08-2.55 3.72"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+            />
+            <circle cx="12" cy="17.1" r="1.05" fill="currentColor" />
+          </svg>
+        </button>
+      </div>
+
+      <header class="hero">
+        <div class="brand">
+          <div class="brand-icon" aria-hidden="true">
+            <svg viewBox="0 0 64 64" role="img">
+              <rect width="64" height="64" rx="17" fill="#17233A" />
+              <path d="M27 21h13c5 0 9 4 9 9v2" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" />
+              <path d="M37 43H24c-5 0-9-4-9-9v-2" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" />
+              <circle cx="27" cy="21" r="6" fill="#2F7BFF" />
+              <circle cx="37" cy="43" r="6" fill="#F05A4F" />
+              <path d="m45 28 4 4 4-4" fill="none" stroke="#F05A4F" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="m19 36-4-4-4 4" fill="none" stroke="#2F7BFF" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </div>
+          <div>
+            <div class="eyebrow">DUAL DNS BROWSER</div>
+            <h1>内外网，同时在线</h1>
+          </div>
+        </div>
+        <p class="intro">
+          不同浏览器使用各自的 DNS。内网系统与公网站点同时打开，不再切换网卡 DNS。
+        </p>
+        <div class="status-line">
+          <span class="status-item">
+            <span class="status-dot" id="browserDot"></span>
+            浏览器：<strong id="browserName">检测中…</strong>
+          </span>
+          <span class="status-sep"></span>
+          <span class="status-item">
+            <span class="status-dot" id="proxyDot"></span>
+            DNS 代理：<strong id="proxyState">未启动</strong>
+          </span>
+        </div>
+      </header>
+
+      <section class="update-banner" id="updateBanner" hidden>
+        <span class="update-banner-icon" aria-hidden="true">↑</span>
+        <div class="update-banner-copy">
+          <strong id="updateBannerTitle">发现新版本</strong>
+          <span id="updateBannerText">可以查看更新内容并下载安装包。</span>
+        </div>
+        <button class="update-banner-action" id="updateBannerOpen" type="button">查看更新</button>
+        <button class="update-banner-close" id="updateBannerClose" type="button" aria-label="稍后提醒">×</button>
+      </section>
+
+      <section class="card settings-card">
+        <div class="section-head">
+          <div>
+            <div class="section-kicker">DNS 配置</div>
+            <h2>把两个环境分开</h2>
+          </div>
+          <button class="text-button" id="resetBtn" type="button">恢复默认</button>
+        </div>
+
+        <div class="dns-grid">
+          <label class="dns-field dns-internal" for="internalDns">
+            <span class="dns-label">
+              <span class="env-chip">内</span>
+              内网 DNS
+              <span class="color-dot" id="internalDot"></span>
+            </span>
+            <span class="input-wrap">
+              <input
+                id="internalDns"
+                type="text"
+                spellcheck="false"
+                autocomplete="off"
+                value="192.168.2.19"
+                aria-label="内网 DNS"
+              />
+              <span class="input-status" aria-hidden="true"></span>
+            </span>
+          </label>
+
+          <label class="dns-field dns-external" for="externalDns">
+            <span class="dns-label">
+              <span class="env-chip">外</span>
+              外网 DNS
+              <span class="color-dot" id="externalDot"></span>
+            </span>
+            <span class="input-wrap">
+              <input
+                id="externalDns"
+                type="text"
+                spellcheck="false"
+                autocomplete="off"
+                value="8.8.8.8"
+                aria-label="外网 DNS"
+              />
+              <span class="input-status" aria-hidden="true"></span>
+            </span>
+          </label>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="subsection-head">
+          <div class="section-kicker">浏览器与窗口标识</div>
+          <span class="field-note">颜色修改后，下次打开浏览器生效</span>
+        </div>
+
+        <div class="browser-row">
+          <label class="browser-field" for="browserSelect">
+            <span class="field-label">打开方式</span>
+            <span class="select-wrap">
+              <select id="browserSelect" aria-label="选择浏览器"></select>
+              <span class="select-arrow" aria-hidden="true">
+                <svg viewBox="0 0 12 8" role="img">
+                  <path d="m1.5 1.75 4.5 4.5 4.5-4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </span>
+            </span>
+          </label>
+
+          <div class="custom-path" id="customPathRow" hidden>
+            <input
+              id="browserPath"
+              type="text"
+              spellcheck="false"
+              autocomplete="off"
+              placeholder="/Applications/.../Google Chrome"
+              aria-label="浏览器可执行文件路径"
+            />
+            <button class="pick-button" id="pickBrowser" type="button">浏览…</button>
+          </div>
+        </div>
+
+        <div class="browser-note" id="browserNote">
+          Chrome / Edge 支持页面内彩色边框与标题前缀；Firefox 使用窗口顶部色条区分。
+        </div>
+
+        <div class="color-grid">
+          <label class="color-field color-internal" for="internalColor">
+            <span class="field-label">内网窗口颜色</span>
+            <span class="color-control">
+              <input id="internalColor" type="color" value="#2f7bff" aria-label="内网窗口颜色" />
+              <em id="internalColorText">#2F7BFF</em>
+            </span>
+          </label>
+
+          <label class="color-field color-external" for="externalColor">
+            <span class="field-label">外网窗口颜色</span>
+            <span class="color-control">
+              <input id="externalColor" type="color" value="#f05a4f" aria-label="外网窗口颜色" />
+              <em id="externalColorText">#F05A4F</em>
+            </span>
+          </label>
+        </div>
+
+        <div class="settings-foot">
+          <span class="hint" id="saveHint">修改 DNS 后，点击保存</span>
+          <button class="save-button" id="saveBtn" type="button">
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M4 3h10l2 2v12H4V3Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+              <path d="M7 3v5h6V3M7 17v-5h6v5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+            </svg>
+            保存配置
+          </button>
+        </div>
+      </section>
+
+      <section class="action-area">
+        <div class="action-grid">
+          <button class="launch-button launch-internal" id="openInternal" type="button">
+            <span class="launch-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 12a8 8 0 1 0 8-8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+                <path d="M12 4v8l5 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </span>
+            <span class="launch-copy">
+              <strong>打开内网</strong>
+              <small>使用内网 DNS</small>
+            </span>
+            <span class="launch-arrow">↗</span>
+          </button>
+
+          <button class="launch-button launch-external" id="openExternal" type="button">
+            <span class="launch-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="8.2" fill="none" stroke="currentColor" stroke-width="1.7" />
+                <path d="M3.8 12h16.4M12 3.8c2 2.2 3 5 3 8.2s-1 6-3 8.2c-2-2.2-3-5-3-8.2s1-6 3-8.2Z" fill="none" stroke="currentColor" stroke-width="1.7" />
+              </svg>
+            </span>
+            <span class="launch-copy">
+              <strong>打开外网</strong>
+              <small>使用公网 DNS</small>
+            </span>
+            <span class="launch-arrow">↗</span>
+          </button>
+        </div>
+
+        <button class="launch-both" id="openBoth" type="button">
+          <span class="both-glow"></span>
+          <span class="both-icon">
+            <span class="mini-window mini-window-a"></span>
+            <span class="mini-window mini-window-b"></span>
+          </span>
+          <span class="both-copy">
+            <strong>同时打开内网 + 外网</strong>
+            <small>两个独立浏览器窗口，互不影响</small>
+          </span>
+          <span class="both-shortcut" id="bothShortcut">⌘ ↵</span>
+        </button>
+      </section>
+
+      <section class="marker-card">
+        <div class="marker-demo">
+          <span class="demo-frame demo-frame-internal">
+            <span class="demo-top"></span>
+            <span class="demo-dns">
+              <em>DNS</em>
+              <b id="demoInternalDns">192.168.2.19</b>
+            </span>
+          </span>
+          <span class="demo-frame demo-frame-external">
+            <span class="demo-top"></span>
+            <span class="demo-dns">
+              <em>DNS</em>
+              <b id="demoExternalDns">8.8.8.8</b>
+            </span>
+          </span>
+        </div>
+        <div class="marker-copy">
+          <strong>一眼区分两个窗口</strong>
+          <span>Chrome / Edge：页面四周彩色边框、Tab 标题前缀；Firefox：窗口顶部同色色条。</span>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <span>不修改系统 DNS 与 hosts</span>
+        <span class="footer-dot"></span>
+        <span class="footer-link" id="stopProxies" role="button" tabindex="0">停止本地代理</span>
+        <span class="footer-dot"></span>
+        <span class="author">Author: itsleonlu@gmail.com</span>
+      </footer>
+    </main>
+
+    <div class="help-backdrop" id="helpModal" hidden>
+      <section
+        class="help-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="helpTitle"
+        tabindex="-1"
+      >
+        <header class="help-head">
+          <div>
+            <div class="section-kicker">HELP &amp; FAQ</div>
+            <h2 id="helpTitle">使用说明与常见问题</h2>
+          </div>
+          <button class="help-close" id="helpClose" type="button" aria-label="关闭使用说明">
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="m5 5 10 10M15 5 5 15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+            </svg>
+          </button>
+        </header>
+
+        <div class="help-body" id="helpBody">
+          <section class="help-section">
+            <h3>快速开始</h3>
+            <ol class="help-steps">
+              <li>确认内网 DNS（默认 <code>192.168.2.19</code>）和外网 DNS（默认 <code>8.8.8.8</code>），修改后点“保存配置”。</li>
+              <li>点“打开内网”“打开外网”或“同时打开内网 + 外网”。</li>
+              <li>之后都在弹出的浏览器窗口里操作，不要再点桌面上的 Chrome 图标。内网窗口需要能访问内网 DNS；不在公司网络时请先连 VPN。</li>
+            </ol>
+          </section>
+
+          <section class="help-section">
+            <h3>怎么区分两个窗口</h3>
+            <div class="help-env-grid">
+              <div class="help-env help-env-internal">
+                <span class="help-env-chip">内网</span>
+                <strong>蓝色边框</strong>
+                <small>DNS <code>192.168.2.19</code> · 端口 <code>18080</code></small>
+                <small>标题前缀 <code>【内网环境】</code></small>
+              </div>
+              <div class="help-env help-env-external">
+                <span class="help-env-chip">外网</span>
+                <strong>红色边框</strong>
+                <small>DNS <code>8.8.8.8</code> · 端口 <code>18082</code></small>
+                <small>标题前缀 <code>【外网环境】</code></small>
+              </div>
+            </div>
+            <p class="help-note">
+              Chrome / Edge 会显示页面 2px 彩色边框和标签页标题前缀；Firefox 使用窗口顶部 6px 色条。
+              颜色可以在主界面自定义，修改后下次打开浏览器生效。同时打开时，内网窗口在左，外网窗口在右。
+            </p>
+          </section>
+
+          <section class="help-section help-section-agent">
+            <div class="help-section-title">
+              <h3>Agent / 自动化如何识别</h3>
+              <span class="help-badge">推荐</span>
+            </div>
+            <p>
+              优先读取页面内的稳定标识，不要只靠颜色或窗口位置判断。Chrome / Edge 页面加载后，可直接在页面上下文执行：
+            </p>
+            <pre class="help-code"><code>const env = document.documentElement.dataset.dualdnsEnv;
+// "internal" 内网 / "external" 外网
+
+const info = window.__DUALDNS_ENV__;
+// { env, label, dns }
+// label: "内网环境" / "外网环境"</code></pre>
+            <ul class="help-list">
+              <li><code>dataset.dualdnsEnv</code>：<code>internal</code> 或 <code>external</code>，最稳定的判断依据。</li>
+              <li><code>dataset.dualdnsLabel</code>：中文标签；<code>dataset.dualdnsDns</code>：当前 DNS。</li>
+              <li>Chrome / Edge 的标签页标题始终带 <code>【内网环境】</code> 或 <code>【外网环境】</code> 前缀。</li>
+              <li>代理端口：内网 <code>18080</code>、外网 <code>18082</code>。可从浏览器进程的 <code>--proxy-server</code> 启动参数或本地代理确认；<strong>目标网站地址栏不会显示代理端口</strong>。</li>
+              <li>同时打开时，内网窗口默认在屏幕左侧，外网窗口在右侧。</li>
+            </ul>
+            <p class="help-note">
+              Firefox 不支持页面内注入，Agent 可改用窗口顶部色条、独立配置目录或代理端口判断。
+              第一次打开页面时标识注入可能有短暂延迟，读取不到时等待页面加载完成或稍后重试。
+            </p>
+          </section>
+
+          <section class="help-section">
+            <h3>检查更新</h3>
+            <p>
+              主界面右上角的版本号按钮可以随时检查更新。应用启动时也会自动静默检查一次；发现新版本时会显示一条提示，不打断正常使用。
+            </p>
+            <ul class="help-list">
+              <li>默认“自动”模式会优先请求 Gitee 国内源，失败后自动切换到 GitHub 国外源。</li>
+              <li>也可以在更新弹窗中手动选择 Gitee 或 GitHub。国内外网络环境不同，国内网络建议用 Gitee，海外网络建议用 GitHub。</li>
+              <li>发现新版本后，可以直接打开对应平台的下载链接或发布页。覆盖安装不会删除 DNS 配置和浏览器登录状态。</li>
+              <li>当前安装包没有代码签名，应用内只负责检查和跳转下载，不会静默执行安装。</li>
+            </ul>
+          </section>
+
+          <section class="help-section">
+            <h3>常见问题</h3>
+            <div class="faq-item">
+              <strong>检查更新失败怎么办？</strong>
+              <p>先确认能正常访问 gitee.com 或 github.com，再到更新弹窗中手动切换更新源重试。公司网络限制外部访问时，可以先用手机热点测试。</p>
+            </div>
+            <div class="faq-item">
+              <strong>关掉应用后浏览器上不了网？</strong>
+              <p>正常现象。本地代理会随应用退出，重新打开应用再点一次按钮即可；原窗口刷新后恢复。</p>
+            </div>
+            <div class="faq-item">
+              <strong>提示端口被占用？</strong>
+              <p>本机 <code>18080</code> 或 <code>18082</code> 被其他程序占用。关掉占用程序，或在底部点“停止本地代理”后重试。</p>
+            </div>
+            <div class="faq-item">
+              <strong>第一次打开浏览器是空白页 / 要重新登录？</strong>
+              <p>两个环境使用独立配置目录，登录状态互不影响，首次需要分别登录，属于正常现象。</p>
+            </div>
+            <div class="faq-item">
+              <strong>应用图标显示空白或还是旧图标？</strong>
+              <p>确认运行的是安装包里的应用，不要直接运行开发目录中的二进制文件。macOS 可执行 <code>killall Finder</code> 或重启；Windows 请重新安装最新 Setup 版。</p>
+            </div>
+          </section>
+
+          <section class="help-section">
+            <h3>安装提示</h3>
+            <p>
+              安装包没有购买代码签名证书。macOS 首次打开请右键应用 → 打开 → 再点“打开”；若提示“已损坏”，执行
+              <code>xattr -dr com.apple.quarantine "/Applications/DualDNS Browser.app"</code>。
+              Windows SmartScreen 提示时点“更多信息” → “仍要运行”。
+            </p>
+          </section>
+        </div>
+
+        <footer class="help-foot">
+          <span>不修改系统 DNS 与 hosts</span>
+          <span>Author: itsleonlu@gmail.com</span>
+        </footer>
+      </section>
+    </div>
+
+    <div class="help-backdrop" id="updateModal" hidden>
+      <section
+        class="help-dialog update-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="updateTitle"
+        tabindex="-1"
+      >
+        <header class="help-head">
+          <div>
+            <div class="section-kicker">UPDATES</div>
+            <h2 id="updateTitle">检查更新</h2>
+          </div>
+          <button class="help-close" id="updateClose" type="button" aria-label="关闭检查更新">
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="m5 5 10 10M15 5 5 15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+            </svg>
+          </button>
+        </header>
+
+        <div class="help-body update-body">
+          <div class="update-toolbar">
+            <div class="update-current">
+              <span class="update-label">当前版本</span>
+              <strong id="updateCurrentVersion">v1.1.1</strong>
+            </div>
+            <label class="update-source" for="updateSource">
+              <span class="update-label">更新源</span>
+              <span class="update-select-wrap">
+                <select id="updateSource">
+                  <option value="auto">自动（优先 Gitee）</option>
+                  <option value="gitee">Gitee 国内</option>
+                  <option value="github">GitHub 国外</option>
+                </select>
+                <svg viewBox="0 0 12 8" aria-hidden="true">
+                  <path d="m1.5 1.75 4.5 4.5 4.5-4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </span>
+            </label>
+          </div>
+
+          <button class="update-check-button" id="updateCheck" type="button">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path
+                d="M13 8a5 5 0 1 1-1.46-3.54M13 3v3.2H9.8"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.35"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span id="updateCheckLabel">检查更新</span>
+          </button>
+
+          <div class="update-status" id="updateStatus" hidden>
+            <span class="update-status-dot" id="updateStatusDot"></span>
+            <span id="updateStatusText"></span>
+          </div>
+
+          <div class="update-result" id="updateResult" hidden>
+            <div class="update-result-head">
+              <div>
+                <span class="update-label">最新版本</span>
+                <strong id="updateLatest">v1.1.1</strong>
+              </div>
+              <span class="update-badge" id="updateBadge">有新版本</span>
+            </div>
+            <div class="update-meta" id="updateMeta"></div>
+            <div class="update-notes" id="updateNotes"></div>
+
+            <div class="update-downloads" id="updateDownloads"></div>
+
+            <button class="update-release" id="updateRelease" type="button">
+              打开发布页
+              <span aria-hidden="true">↗</span>
+            </button>
+          </div>
+
+          <div class="update-source-note">
+            <strong>国内 / 国外双源</strong>
+            <p>
+              Gitee 与 GitHub 同步发布。自动模式会先请求 Gitee，超时或失败后切换到 GitHub。
+              下载后覆盖安装即可，DNS 配置和浏览器登录状态会保留。
+            </p>
+          </div>
+        </div>
+
+        <footer class="help-foot">
+          <span>Gitee 国内源 · GitHub 国外源</span>
+          <span id="updatePlatform">当前平台：—</span>
+        </footer>
+      </section>
+    </div>
+
+    <div class="toast-stack" id="toasts" aria-live="polite"></div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

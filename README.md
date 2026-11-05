@@ -113,6 +113,12 @@ updates/          Gitee / GitHub 更新清单
 
 v1.1.3 起，清单还需要为每个平台提供 `checksums`（SHA256）和 `sizes`。应用内更新会流式下载当前平台安装包、显示进度并校验 SHA256，通过后退出并由辅助进程安装、重启。出于安全考虑，应用内安装只接受本仓库在 GitHub / Gitee 的 HTTPS Release 下载地址；其他平台或校验失败时会回退到发布页手动下载。
 
+## 许可证
+
+本项目采用 [MIT License](LICENSE) 开源。
+
+你可以自由使用、复制、修改、合并、发布、分发、再许可和销售本软件，但需要保留版权声明和许可证声明。本软件按“原样”提供，不附带任何明示或暗示的担保。
+
 ## Author
 
 Author · itsleonlu@gmail.com

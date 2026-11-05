@@ -852,6 +852,28 @@ async fn check_for_updates(source: Option<String>) -> Result<update::UpdateCheck
 }
 
 #[tauri::command]
+async fn download_and_install(
+    app: AppHandle,
+    url: String,
+    sha256: String,
+    version: String,
+) -> Result<update::InstallResult, String> {
+    let exit_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        update::download_and_install(&app, &url, &sha256, &version)
+    })
+    .await
+    .map_err(|error| format!("下载更新失败: {error}"))??;
+    stop_all_proxies(&exit_app);
+    let handle = exit_app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(1400));
+        handle.exit(0);
+    });
+    Ok(result)
+}
+
+#[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
     update::open_external_url(&url)
 }
@@ -883,6 +905,7 @@ pub fn run() {
             pick_browser,
             app_version,
             check_for_updates,
+            download_and_install,
             open_external_url
         ])
         .build(tauri::generate_context!())

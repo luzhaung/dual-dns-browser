@@ -59,15 +59,25 @@ cp "$ROOT/使用说明.md" "$DIST/使用说明.md"
   shasum -a 256 *.dmg *.exe > SHA256SUMS.txt
 )
 
-node - "$VERSION" "$ROOT/RELEASE_NOTES.md" "$ROOT/updates" "$GH_REPO" "$GITEE_REPO" <<'NODE'
+node - "$VERSION" "$ROOT/RELEASE_NOTES.md" "$ROOT/updates" "$DIST" "$GH_REPO" "$GITEE_REPO" <<'NODE'
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 
-const [version, notesFile, updatesDir, ghRepo, giteeRepo] = process.argv.slice(2);
+const [version, notesFile, updatesDir, distDir, ghRepo, giteeRepo] = process.argv.slice(2);
 const notes = fs.readFileSync(notesFile, "utf8").trim();
 const apple = `DualDNS-Browser-${version}-macOS-AppleSilicon.dmg`;
 const intel = `DualDNS-Browser-${version}-macOS-Intel.dmg`;
 const setup = `DualDNS-Browser-${version}-Windows-x64-Setup.exe`;
+const files = { "macos-aarch64": apple, "macos-x86_64": intel, "windows-x86_64": setup };
+
+const checksums = {};
+const sizes = {};
+for (const [platform, filename] of Object.entries(files)) {
+  const bytes = fs.readFileSync(path.join(distDir, filename));
+  checksums[platform] = crypto.createHash("sha256").update(bytes).digest("hex");
+  sizes[platform] = bytes.length;
+}
 
 const makeManifest = (host, repo) => {
   const base = `https://${host}/${repo}`;
@@ -81,6 +91,8 @@ const makeManifest = (host, repo) => {
       "macos-x86_64": `${base}/releases/download/v${version}/${intel}`,
       "windows-x86_64": `${base}/releases/download/v${version}/${setup}`,
     },
+    checksums,
+    sizes,
   };
 };
 

@@ -87,19 +87,31 @@ updates/          Gitee / GitHub 更新清单
 
 ```json
 {
-  "version": "1.1.2",
+  "version": "1.1.3",
   "published_at": "2026-11-05T12:00:00Z",
   "notes": "更新内容",
-  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.1.2",
+  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.1.3",
   "downloads": {
     "macos-aarch64": "https://example.com/apple.dmg",
     "macos-x86_64": "https://example.com/intel.dmg",
     "windows-x86_64": "https://example.com/setup.exe"
+  },
+  "checksums": {
+    "macos-aarch64": "<sha256>",
+    "macos-x86_64": "<sha256>",
+    "windows-x86_64": "<sha256>"
+  },
+  "sizes": {
+    "macos-aarch64": 12345678,
+    "macos-x86_64": 12345678,
+    "windows-x86_64": 12345678
   }
 }
 ```
 
 应用请求清单时会附加时间戳参数避免 CDN 缓存。自动模式先请求 Gitee，超时或失败后切换 GitHub；GitHub 源直连失败时会自动回退到 CDN 镜像。
+
+v1.1.3 起，清单还需要为每个平台提供 `checksums`（SHA256）和 `sizes`。应用内更新会流式下载当前平台安装包、显示进度并校验 SHA256，通过后退出并由辅助进程安装、重启。出于安全考虑，应用内安装只接受本仓库在 GitHub / Gitee 的 HTTPS Release 下载地址；其他平台或校验失败时会回退到发布页手动下载。
 
 ## Author
 

@@ -23,7 +23,7 @@
           title="检查更新"
         >
           <span class="version-dot" id="versionDot"></span>
-          <span id="versionLabel">v1.1.2</span>
+          <span id="versionLabel">v1.1.3</span>
           <svg class="version-refresh" viewBox="0 0 16 16" aria-hidden="true">
             <path
               d="M13 8a5 5 0 1 1-1.46-3.54M13 3v3.2H9.8"
@@ -383,8 +383,8 @@ const info = window.__DUALDNS_ENV__;
             <ul class="help-list">
               <li>默认“自动”模式会优先请求 Gitee 国内源，失败后自动切换到 GitHub 国外源。</li>
               <li>也可以在更新弹窗中手动选择 Gitee 或 GitHub。国内外网络环境不同，国内网络建议用 Gitee，海外网络建议用 GitHub。</li>
-              <li>发现新版本后，可以直接打开对应平台的下载链接或发布页。覆盖安装不会删除 DNS 配置和浏览器登录状态。</li>
-              <li>当前安装包没有代码签名，应用内只负责检查和跳转下载，不会静默执行安装。</li>
+              <li>发现新版本后，点击“立即更新到 vX”即可在应用内下载；文件会先校验 SHA256，然后应用自动退出、安装并重启。</li>
+              <li>应用内更新失败时，可以点“打开发布页”手动下载。更新不会删除 DNS 配置和浏览器登录状态。</li>
             </ul>
           </section>
 
@@ -453,7 +453,7 @@ const info = window.__DUALDNS_ENV__;
           <div class="update-toolbar">
             <div class="update-current">
               <span class="update-label">当前版本</span>
-              <strong id="updateCurrentVersion">v1.1.2</strong>
+              <strong id="updateCurrentVersion">v1.1.3</strong>
             </div>
             <label class="update-source" for="updateSource">
               <span class="update-label">更新源</span>
@@ -493,26 +493,48 @@ const info = window.__DUALDNS_ENV__;
             <div class="update-result-head">
               <div>
                 <span class="update-label">最新版本</span>
-                <strong id="updateLatest">v1.1.2</strong>
+                <strong id="updateLatest">v1.1.3</strong>
               </div>
               <span class="update-badge" id="updateBadge">有新版本</span>
             </div>
             <div class="update-meta" id="updateMeta"></div>
             <div class="update-notes" id="updateNotes"></div>
 
-            <div class="update-downloads" id="updateDownloads"></div>
+            <div class="update-install" id="updateInstall" hidden>
+              <div class="update-install-copy">
+                <span class="update-label" id="updateInstallPlatform">当前设备</span>
+                <strong id="updateInstallHint">应用内下载 · 自动校验 · 安装后重启</strong>
+              </div>
+              <button class="update-install-button" id="updateInstallButton" type="button">
+                <span id="updateInstallLabel">立即更新</span>
+              </button>
+              <div class="update-progress" id="updateProgress" hidden aria-live="polite">
+                <div class="update-progress-track">
+                  <span id="updateProgressBar"></span>
+                </div>
+                <div class="update-progress-copy">
+                  <span id="updateProgressText">准备下载…</span>
+                  <span id="updateProgressPercent"></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="update-other" id="updateOther" hidden>
+              <span class="update-other-title">其他平台安装包</span>
+              <div class="update-downloads" id="updateDownloads"></div>
+            </div>
 
             <button class="update-release" id="updateRelease" type="button">
-              打开发布页
+              下载遇到问题？打开发布页
               <span aria-hidden="true">↗</span>
             </button>
           </div>
 
           <div class="update-source-note">
-            <strong>国内 / 国外双源</strong>
+            <strong>应用内更新 · 国内 / 国外双源</strong>
             <p>
               Gitee 与 GitHub 同步发布。自动模式会先请求 Gitee，超时或失败后切换到 GitHub，并在需要时自动尝试镜像。
-              下载后覆盖安装即可，DNS 配置和浏览器登录状态会保留。
+              点击“立即更新到 vX”后会校验 SHA256，应用自动退出并重启完成更新；DNS 配置和浏览器登录状态会保留。
             </p>
           </div>
         </div>

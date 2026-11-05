@@ -54,6 +54,16 @@ const updateLatest = document.getElementById("updateLatest");
 const updateBadge = document.getElementById("updateBadge");
 const updateMeta = document.getElementById("updateMeta");
 const updateNotes = document.getElementById("updateNotes");
+const updateInstall = document.getElementById("updateInstall");
+const updateInstallPlatform = document.getElementById("updateInstallPlatform");
+const updateInstallHint = document.getElementById("updateInstallHint");
+const updateInstallButton = document.getElementById("updateInstallButton");
+const updateInstallLabel = document.getElementById("updateInstallLabel");
+const updateProgress = document.getElementById("updateProgress");
+const updateProgressBar = document.getElementById("updateProgressBar");
+const updateProgressText = document.getElementById("updateProgressText");
+const updateProgressPercent = document.getElementById("updateProgressPercent");
+const updateOther = document.getElementById("updateOther");
 const updateDownloads = document.getElementById("updateDownloads");
 const updateRelease = document.getElementById("updateRelease");
 const updatePlatform = document.getElementById("updatePlatform");
@@ -78,8 +88,10 @@ let helpReturnFocus = null;
 let updateReturnFocus = null;
 let updateInfo = null;
 let updateBusy = false;
+let updateInstallBusy = false;
+let updateInstallLink = null;
 let updateSource = readStorage("dualdns.updateSource", "auto");
-let currentVersion = "1.1.2";
+let currentVersion = "1.1.3";
 let currentPlatformLabel = "";
 let dismissedUpdate = readStorage("dualdns.dismissedUpdate", "");
 
@@ -352,25 +364,38 @@ function renderUpdateResult(result) {
     .join(" · ");
   updateNotes.textContent = result.notes?.trim() || "本次更新没有提供详细说明。";
 
+  const downloads = result.downloads || [];
+  const currentDownload = downloads.find((item) => item.current);
+  const otherDownloads = downloads.filter((item) => !item.current);
+  updateInstallLink = currentDownload || null;
+  updateInstall.hidden = !result.update_available || !currentDownload;
+  updateOther.hidden = !result.update_available || otherDownloads.length === 0;
+  resetUpdateProgress();
+
+  if (currentDownload) {
+    updateInstallPlatform.textContent = `当前设备 · ${currentDownload.label}`;
+    updateInstallHint.textContent = currentDownload.installable
+      ? "应用内下载 · 自动校验 · 安装后重启"
+      : "当前更新源未提供安装包校验值，请打开发布页下载";
+    updateInstallLabel.textContent = currentDownload.installable
+      ? `立即更新到 v${result.latest_version}`
+      : "打开发布页下载";
+    updateInstallButton.disabled = false;
+  }
+
   updateDownloads.textContent = "";
-  (result.downloads || []).forEach((item) => {
+  otherDownloads.forEach((item) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `update-download${item.current ? " current" : ""}`;
+    button.className = "update-download";
     const label = document.createElement("span");
     label.className = "update-download-label";
     label.textContent = item.label;
     button.appendChild(label);
-    if (item.current) {
-      const tag = document.createElement("span");
-      tag.className = "update-download-tag";
-      tag.textContent = "当前设备";
-      button.appendChild(tag);
-    }
-    const arrow = document.createElement("span");
-    arrow.className = "update-download-arrow";
-    arrow.textContent = "↓";
-    button.appendChild(arrow);
+    const action = document.createElement("span");
+    action.className = "update-download-action";
+    action.textContent = "下载";
+    button.appendChild(action);
     button.addEventListener("click", () => openUpdateLink(item.url));
     updateDownloads.appendChild(button);
   });
@@ -388,6 +413,91 @@ function renderUpdateResult(result) {
   else hideUpdateBanner();
 }
 
+function formatBytes(value) {
+  const bytes = Number(value) || 0;
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+function resetUpdateProgress() {
+  updateProgress.hidden = true;
+  updateProgress.classList.remove("indeterminate");
+  updateProgressBar.style.width = "0%";
+  updateProgressText.textContent = "准备下载…";
+  updateProgressPercent.textContent = "";
+}
+
+function setUpdateProgress(percent, text, indeterminate = false) {
+  updateProgress.hidden = false;
+  updateProgress.classList.toggle("indeterminate", indeterminate);
+  if (!indeterminate) {
+    const safePercent = Math.max(0, Math.min(100, Math.round(percent)));
+    updateProgressBar.style.width = `${safePercent}%`;
+    updateProgressPercent.textContent = `${safePercent}%`;
+  } else {
+    updateProgressPercent.textContent = "";
+  }
+  updateProgressText.textContent = text;
+}
+
+function handleUpdateProgress(payload) {
+  if (!updateInstallBusy || !payload) return;
+  if (payload.phase === "verifying") {
+    setUpdateProgress(100, "正在校验 SHA256…");
+    return;
+  }
+  const downloaded = Number(payload.downloaded) || 0;
+  const total = Number(payload.total) || 0;
+  if (total > 0) {
+    const percent = Math.min(100, Math.round((downloaded / total) * 100));
+    setUpdateProgress(percent, `正在下载 ${formatBytes(downloaded)} / ${formatBytes(total)}`);
+  } else {
+    setUpdateProgress(0, `正在下载 ${formatBytes(downloaded)}`, true);
+  }
+}
+
+async function installUpdate() {
+  if (updateInstallBusy || !updateInfo || !updateInstallLink) return;
+  if (!updateInstallLink.installable) {
+    await openUpdateLink(updateInstallLink.url);
+    return;
+  }
+  if (!invoke) {
+    showToast("当前为界面预览模式，桌面应用中才能安装更新", "error");
+    return;
+  }
+
+  updateInstallBusy = true;
+  updateInstallButton.disabled = true;
+  updateInstallLabel.textContent = "正在下载更新…";
+  updateCheck.disabled = true;
+  updateSourceSelect.disabled = true;
+  setUpdateProgress(0, "正在连接更新源…", true);
+  setUpdateStatus("", `正在下载 v${updateInfo.latest_version}，请保持网络连接…`);
+
+  try {
+    const result = await invoke("download_and_install", {
+      url: updateInstallLink.url,
+      sha256: updateInstallLink.sha256,
+      version: updateInfo.latest_version,
+    });
+    setUpdateProgress(100, "校验完成，正在安装…");
+    updateInstallLabel.textContent = "更新已准备完成";
+    setUpdateStatus("success", `${result.message} 应用即将自动重启。`);
+  } catch (error) {
+    updateInstallButton.disabled = false;
+    updateInstallLabel.textContent = "重试更新";
+    setUpdateProgress(0, "下载未完成");
+    setUpdateStatus("error", friendlyError(error));
+    showToast("应用内更新失败", "error");
+  } finally {
+    updateInstallBusy = false;
+    updateCheck.disabled = false;
+    updateSourceSelect.disabled = false;
+  }
+}
+
 async function openUpdateLink(url) {
   if (!url) return;
   if (!invoke) {
@@ -402,7 +512,7 @@ async function openUpdateLink(url) {
 }
 
 async function checkForUpdates({ startup = false } = {}) {
-  if (updateBusy) return;
+  if (updateBusy || updateInstallBusy) return;
   if (!invoke) {
     if (!startup) setUpdateStatus("error", "当前为界面预览模式，桌面应用中才能检查更新。");
     return;
@@ -459,6 +569,12 @@ async function loadAppVersion() {
 
 async function initUpdates() {
   if (!invoke) return;
+  const listen = window.__TAURI__?.event?.listen;
+  if (listen) {
+    await listen("update-download-progress", (event) => {
+      handleUpdateProgress(event.payload);
+    });
+  }
   updateSourceSelect.value = updateSource;
   await loadAppVersion();
   window.setTimeout(() => checkForUpdates({ startup: true }), 900);
@@ -766,6 +882,7 @@ updateModal.addEventListener("keydown", (event) => {
   trapModalFocus(event, updateModal, updateDialog);
 });
 updateCheck.addEventListener("click", () => checkForUpdates());
+updateInstallButton.addEventListener("click", installUpdate);
 updateSourceSelect.addEventListener("change", () => {
   updateSource = updateSourceSelect.value;
   writeStorage("dualdns.updateSource", updateSource);

@@ -91,7 +91,7 @@ let updateBusy = false;
 let updateInstallBusy = false;
 let updateInstallLink = null;
 let updateSource = readStorage("dualdns.updateSource", "auto");
-let currentVersion = "1.1.4";
+let currentVersion = "1.1.5";
 let currentPlatformLabel = "";
 let dismissedUpdate = readStorage("dualdns.dismissedUpdate", "");
 
@@ -904,6 +904,19 @@ if (!/Mac|iPhone|iPad/.test(navigator.platform)) {
   bothShortcut.textContent = "Ctrl ↵";
 }
 
+function notifyUiReady() {
+  if (!invoke) return;
+  const send = () => {
+    window.setTimeout(() => invoke("ui_ready").catch(() => {}), 80);
+  };
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", send, { once: true });
+  } else {
+    send();
+  }
+}
+
+notifyUiReady();
 loadSettings().then(refreshStatus).then(initUpdates);
 statusTimer = window.setInterval(refreshStatus, 2500);
 window.addEventListener("beforeunload", () => window.clearInterval(statusTimer));

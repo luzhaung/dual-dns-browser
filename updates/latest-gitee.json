@@ -1,21 +1,21 @@
 {
-  "version": "1.1.4",
-  "published_at": "2026-11-05T04:20:37.407Z",
-  "notes": "修复 GitHub 更新源可能显示旧版本的问题。\n\nGitHub 检查更新现在优先读取 GitHub 原始更新清单，只有直连失败时才回退到 CDN 镜像，避免镜像缓存较旧时把 `v1.1.1` 误显示为最新版本。\n\n如果更新源返回的版本低于当前版本，应用会将其识别为过期清单，继续尝试其他地址，不再显示“已是最新”而版本号却更低。更新提示中的版本号也已统一使用清单返回的最新版本。",
-  "release_page": "https://gitee.com/phpbest/dual-dns-browser/releases/tag/v1.1.4",
+  "version": "1.1.5",
+  "published_at": "2026-11-05T06:12:47.492Z",
+  "notes": "修复并优化 Windows 首次启动白屏，同时改进关闭与更新重启行为。\n\n- 主窗口改为界面首帧准备好后再显示，避免 Windows WebView2 初始化期间出现长时间白屏。\n- Windows 端延后并简化浏览器会话恢复，不再在启动时反复调用 PowerShell 扫描进程，减少与 WebView2 初始化争抢 CPU 和磁盘。\n- Windows 端关闭背景模糊等高开销视觉效果，首屏渲染更轻量。\n- Chrome / Edge 启动参数补充关闭后台联网、组件更新和默认应用初始化，缩短首次打开浏览器的等待时间。\n- 点击 × 现在隐藏到系统托盘，代理继续运行；托盘菜单“退出并关闭浏览器”才会彻底退出并关闭本应用启动的浏览器。\n- 应用内更新重启后会自动检测仍在运行的浏览器，并恢复对应环境的代理与页面标识。\n- 更新帮助与常见问题说明。",
+  "release_page": "https://gitee.com/phpbest/dual-dns-browser/releases/tag/v1.1.5",
   "downloads": {
-    "macos-aarch64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.1.4/DualDNS-Browser-1.1.4-macOS-AppleSilicon.dmg",
-    "macos-x86_64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.1.4/DualDNS-Browser-1.1.4-macOS-Intel.dmg",
-    "windows-x86_64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.1.4/DualDNS-Browser-1.1.4-Windows-x64-Setup.exe"
+    "macos-aarch64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.1.5/DualDNS-Browser-1.1.5-macOS-AppleSilicon.dmg",
+    "macos-x86_64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.1.5/DualDNS-Browser-1.1.5-macOS-Intel.dmg",
+    "windows-x86_64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.1.5/DualDNS-Browser-1.1.5-Windows-x64-Setup.exe"
   },
   "checksums": {
-    "macos-aarch64": "42aa6145a7e39212717351cf8caa5fa87152e61f9bebd30f84f0ce2e2368d8fe",
-    "macos-x86_64": "3ca3cca95a1e2686d7b9b4c336bedf7a99738ba78fb500e10198f325e079bdfb",
-    "windows-x86_64": "933b662f40e077119c23390f49713d26037218285f4efb39302f4543bd62cc7a"
+    "macos-aarch64": "4eee7a78d21a7889719c6ad50775ecd9613872f3a83a4e06da21593dee7be572",
+    "macos-x86_64": "45f7b863993b5ad30181971eb508a4b7fca2e2472bed157f899b6655268d83d3",
+    "windows-x86_64": "d2424759d38d96a6d5a3d2da2b28d9d8b98991eb812a58206052dff93036adc9"
   },
   "sizes": {
-    "macos-aarch64": 5314265,
-    "macos-x86_64": 5830147,
-    "windows-x86_64": 4029587
+    "macos-aarch64": 5367352,
+    "macos-x86_64": 5904250,
+    "windows-x86_64": 4068488
   }
 }

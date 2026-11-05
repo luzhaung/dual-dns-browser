@@ -3,16 +3,23 @@ mod update;
 
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::{self, OpenOptions},
     io::{Read, Write},
     net::{IpAddr, SocketAddr, TcpStream},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
     time::{Duration, Instant},
 };
-use tauri::{AppHandle, Manager, State};
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Manager, RunEvent, State, WindowEvent,
+};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
@@ -53,6 +60,28 @@ struct AppState {
     settings: Mutex<Settings>,
     proxies: Mutex<HashMap<String, CommandChild>>,
     markers: Mutex<HashMap<String, std::thread::JoinHandle<()>>>,
+    sessions: Mutex<Vec<BrowserSession>>,
+    tray: Mutex<Option<TrayIcon>>,
+    proxy_lock: Mutex<()>,
+    exit_mode: Mutex<ExitMode>,
+    cleaned: AtomicBool,
+    ui_ready: AtomicBool,
+    hidden_by_user: AtomicBool,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum ExitMode {
+    #[default]
+    Normal,
+    Update,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct BrowserSession {
+    env: String,
+    kind: String,
+    profile_dir: String,
+    pid: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -196,6 +225,303 @@ fn write_settings(app: &AppHandle, settings: &Settings) -> Result<(), String> {
     Ok(())
 }
 
+fn sessions_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app_data_dir(app)?.join("browser-sessions.json"))
+}
+
+fn load_sessions_from_disk(app: &AppHandle) -> Vec<BrowserSession> {
+    let Ok(path) = sessions_path(app) else {
+        return Vec::new();
+    };
+    let Ok(data) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    serde_json::from_str(&data).unwrap_or_default()
+}
+
+fn save_sessions_to_disk(app: &AppHandle, sessions: &[BrowserSession]) -> Result<(), String> {
+    let path = sessions_path(app)?;
+    let temp = path.with_extension("json.tmp");
+    let data = serde_json::to_vec_pretty(sessions).map_err(|e| e.to_string())?;
+    fs::write(&temp, data).map_err(|e| format!("写入浏览器会话失败: {e}"))?;
+    fs::rename(&temp, &path).map_err(|e| format!("保存浏览器会话失败: {e}"))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn process_command_line(pid: u32) -> Option<String> {
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-ww", "-o", "command="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+#[cfg(target_os = "windows")]
+fn process_command_line(pid: u32) -> Option<String> {
+    use std::os::windows::process::CommandExt;
+
+    let script = format!(
+        "$p = Get-CimInstance Win32_Process -Filter \"ProcessId={pid}\"; if ($p) {{ $p.CommandLine }}"
+    );
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command"])
+        .arg(&script)
+        .creation_flags(0x08000000)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+#[cfg(unix)]
+fn find_browser_pid(profile_dir: &Path) -> Option<u32> {
+    if !profile_dir.is_dir() {
+        return None;
+    }
+    let output = Command::new("ps")
+        .args(["-ax", "-ww", "-o", "pid=,command="])
+        .output()
+        .ok()?;
+    let needle = profile_dir.to_string_lossy().to_lowercase();
+    if needle.is_empty() {
+        return None;
+    }
+    let mut main_pid = None;
+    let mut fallback_pid = None;
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let line = line.trim_start();
+        let mut parts = line.splitn(2, |c: char| c.is_whitespace());
+        let Some(pid_text) = parts.next().filter(|value| value.chars().all(|c| c.is_ascii_digit()))
+        else {
+            continue;
+        };
+        let Some(command) = parts.next() else {
+            continue;
+        };
+        let lower = command.to_lowercase();
+        if !lower.contains(&needle) {
+            continue;
+        }
+        let Ok(pid) = pid_text.parse::<u32>() else {
+            continue;
+        };
+        if lower.contains("--type=") {
+            fallback_pid.get_or_insert(pid);
+            continue;
+        }
+        if lower.contains("--remote-debugging-port") {
+            return Some(pid);
+        }
+        main_pid.get_or_insert(pid);
+    }
+    main_pid.or(fallback_pid)
+}
+
+#[cfg(target_os = "windows")]
+fn find_browser_pid(profile_dir: &Path) -> Option<u32> {
+    use std::os::windows::process::CommandExt;
+
+    if !profile_dir.is_dir() {
+        return None;
+    }
+    let needle = profile_dir.to_string_lossy().to_lowercase().replace('\'', "''");
+    let script = format!(
+        "$needle = '{needle}'; \
+         $procs = Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -and $_.CommandLine.ToLower().Contains($needle) }}; \
+         $main = $procs | Where-Object {{ $_.CommandLine -notmatch '--type=' }} | Sort-Object ProcessId; \
+         $preferred = $main | Where-Object {{ $_.CommandLine -match '--remote-debugging-port' }} | Select-Object -First 1; \
+         if ($preferred) {{ $preferred.ProcessId }} \
+         elseif ($main) {{ ($main | Select-Object -First 1).ProcessId }} \
+         elseif ($procs) {{ ($procs | Sort-Object ProcessId | Select-Object -First 1).ProcessId }}"
+    );
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command"])
+        .arg(&script)
+        .creation_flags(0x08000000)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.trim().parse::<u32>().ok())
+}
+
+#[cfg(unix)]
+fn process_exists(pid: u32) -> bool {
+    Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "pid="])
+        .output()
+        .map(|output| {
+            output.status.success() && !String::from_utf8_lossy(&output.stdout).trim().is_empty()
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+fn process_exists(pid: u32) -> bool {
+    use std::os::windows::process::CommandExt;
+
+    Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+        .creation_flags(0x08000000)
+        .output()
+        .map(|output| {
+            output.status.success()
+                && String::from_utf8_lossy(&output.stdout).contains(&pid.to_string())
+        })
+        .unwrap_or(false)
+}
+
+fn process_matches(pid: u32, profile_dir: &Path) -> bool {
+    let needle = profile_dir.to_string_lossy().to_lowercase();
+    if needle.is_empty() || pid == 0 {
+        return false;
+    }
+    process_command_line(pid)
+        .map(|command| command.to_lowercase().contains(&needle))
+        .unwrap_or(false)
+}
+
+fn session_alive(session: &BrowserSession) -> bool {
+    let profile_dir = Path::new(&session.profile_dir);
+    if !profile_dir.is_dir() {
+        return false;
+    }
+    if session.kind == "chromium" && marker::is_running(profile_dir) {
+        return true;
+    }
+    (session.pid > 0 && process_matches(session.pid, profile_dir))
+        || find_browser_pid(profile_dir).is_some()
+}
+
+fn terminate_process(pid: u32) {
+    if pid == 0 || !process_exists(pid) {
+        return;
+    }
+
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if !process_exists(pid) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let _ = Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status();
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T"])
+            .creation_flags(0x08000000)
+            .status();
+        std::thread::sleep(Duration::from_secs(1));
+        if process_exists(pid) {
+            let _ = Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .creation_flags(0x08000000)
+                .status();
+        }
+    }
+}
+
+fn close_browser_session(session: &BrowserSession) {
+    let profile_dir = Path::new(&session.profile_dir);
+    let pid = find_browser_pid(profile_dir)
+        .or_else(|| {
+            (session.pid > 0 && process_matches(session.pid, profile_dir)).then_some(session.pid)
+        })
+        .unwrap_or(0);
+    terminate_process(pid);
+}
+
+fn discover_browser_sessions(app: &AppHandle) -> Vec<BrowserSession> {
+    let Some(profiles_root) = app_data_dir(app).ok().map(|dir| dir.join("profiles")) else {
+        return Vec::new();
+    };
+    if !profiles_root.is_dir() {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+
+    for env in ["internal", "external"] {
+        let chromium_root = profiles_root.join("chromium");
+        if let Ok(entries) = fs::read_dir(chromium_root) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if !name.starts_with(&format!("{env}-")) {
+                    continue;
+                }
+                let profile_dir = entry.path();
+                if !marker::is_running(&profile_dir) {
+                    continue;
+                }
+                let Some(pid) = find_browser_pid(&profile_dir) else {
+                    continue;
+                };
+                found.push(BrowserSession {
+                    env: env.to_string(),
+                    kind: "chromium".to_string(),
+                    profile_dir: profile_dir.to_string_lossy().to_string(),
+                    pid,
+                });
+            }
+        }
+
+        let firefox_profile = profiles_root.join("firefox").join(env);
+        if let Some(pid) = find_browser_pid(&firefox_profile) {
+            found.push(BrowserSession {
+                env: env.to_string(),
+                kind: "firefox".to_string(),
+                profile_dir: firefox_profile.to_string_lossy().to_string(),
+                pid,
+            });
+        }
+    }
+
+    let mut seen = HashSet::new();
+    found.retain(|session| seen.insert(session.profile_dir.clone()));
+    found
+}
+
+fn record_browser_session(app: &AppHandle, state: &AppState, session: BrowserSession) {
+    let Ok(mut sessions) = state.sessions.lock() else {
+        return;
+    };
+    if let Some(existing) = sessions
+        .iter_mut()
+        .find(|item| item.env == session.env && item.profile_dir == session.profile_dir)
+    {
+        if existing.pid == 0 || !session_alive(existing) {
+            *existing = session;
+        }
+    } else {
+        sessions.push(session);
+    }
+    let snapshot = sessions.clone();
+    drop(sessions);
+    let _ = save_sessions_to_disk(app, &snapshot);
+}
+
 fn fetch_health(port: u16) -> Option<ProxyHealth> {
     let timeout = Duration::from_millis(700);
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -261,6 +587,7 @@ fn stop_proxy_handle(state: &AppState, env: &str) {
 
 fn stop_all_proxies(app: &AppHandle) {
     let state = app.state::<AppState>();
+    let _guard = state.proxy_lock.lock();
     stop_proxy_handle(&state, "internal");
     stop_proxy_handle(&state, "external");
     request_shutdown(INTERNAL_PORT);
@@ -274,9 +601,19 @@ fn ensure_proxy(
     dns: &str,
     color: &str,
 ) -> Result<(), String> {
+    let _guard = state
+        .proxy_lock
+        .lock()
+        .map_err(|_| "内部状态错误".to_string())?;
+    let owned_by_current_app = state
+        .proxies
+        .lock()
+        .map(|proxies| proxies.contains_key(profile.key))
+        .unwrap_or(false);
+
     if let Some(health) = fetch_health(profile.port) {
         let is_ours = health.app.as_deref() == Some("dualdns");
-        if is_ours && health.dns == dns {
+        if owned_by_current_app && is_ours && health.dns == dns {
             return Ok(());
         }
         if is_ours {
@@ -524,7 +861,7 @@ fn launch_chromium(
     proxy_port: u16,
     layout: WindowLayout,
     app: &AppHandle,
-) -> Result<PathBuf, String> {
+) -> Result<(PathBuf, u32), String> {
     let browser_slug = slug(&browser_name(browser));
     let browser_slug = if browser_slug.is_empty() {
         "chromium".to_string()
@@ -547,10 +884,19 @@ fn launch_chromium(
         .arg("--no-first-run")
         .arg("--no-default-browser-check")
         .arg("--disable-search-engine-choice-screen")
+        .arg("--disable-background-networking")
+        .arg("--disable-component-update")
+        .arg("--disable-default-apps")
+        .arg("--disable-domain-reliability")
+        .arg("--no-service-autorun")
         .arg("--disable-quic")
         .arg("--dns-prefetch-disable")
         .arg("--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
         .arg("--hide-crash-restore-bubble");
+    #[cfg(target_os = "windows")]
+    {
+        command.arg("--disable-features=CalculateNativeWinOcclusion");
+    }
     if let Some(placement) = window_placement(app, layout) {
         command
             .arg(format!(
@@ -576,10 +922,10 @@ fn launch_chromium(
         command.creation_flags(0x08000000);
     }
 
-    command
+    let child = command
         .spawn()
         .map_err(|e| format!("启动浏览器失败: {e}"))?;
-    Ok(profile_dir)
+    Ok((profile_dir, child.id()))
 }
 
 fn firefox_user_js(port: u16, start_url: &str) -> String {
@@ -627,7 +973,7 @@ fn launch_firefox(
     proxy_port: u16,
     color: &str,
     app: &AppHandle,
-) -> Result<(), String> {
+) -> Result<(PathBuf, u32), String> {
     let profile_dir = app_data_dir(app)?
         .join("profiles")
         .join("firefox")
@@ -671,10 +1017,10 @@ fn launch_firefox(
         command.creation_flags(0x08000000);
     }
 
-    command
+    let child = command
         .spawn()
         .map_err(|e| format!("启动 Firefox 失败: {e}"))?;
-    Ok(())
+    Ok((profile_dir, child.id()))
 }
 
 #[tauri::command]
@@ -772,20 +1118,35 @@ fn open_env(
 
     ensure_proxy(&app, &state, profile, &dns, &color)?;
 
-    match browser_kind(&browser) {
+    let kind = browser_kind(&browser);
+    let (profile_dir, pid) = match kind {
         BrowserKind::Chromium => {
             let window_layout = match layout.as_deref() {
                 Some("split") if profile.key == "internal" => WindowLayout::SplitLeft,
                 Some("split") => WindowLayout::SplitRight,
                 _ => WindowLayout::Single,
             };
-            let profile_dir =
-                launch_chromium(&browser, profile, profile.port, window_layout, &app)?;
-            start_marker(&state, profile, &color, &dns, profile_dir);
+            launch_chromium(&browser, profile, profile.port, window_layout, &app)?
         }
-        BrowserKind::Firefox => {
-            launch_firefox(&browser, profile, profile.port, &color, &app)?;
-        }
+        BrowserKind::Firefox => launch_firefox(&browser, profile, profile.port, &color, &app)?,
+    };
+
+    record_browser_session(
+        &app,
+        &state,
+        BrowserSession {
+            env: env.clone(),
+            kind: match kind {
+                BrowserKind::Chromium => "chromium".to_string(),
+                BrowserKind::Firefox => "firefox".to_string(),
+            },
+            profile_dir: profile_dir.to_string_lossy().to_string(),
+            pid,
+        },
+    );
+
+    if matches!(kind, BrowserKind::Chromium) {
+        start_marker(&state, profile, &color, &dns, profile_dir);
     }
 
     Ok(OpenResult {
@@ -829,6 +1190,176 @@ fn stop_proxies(app: AppHandle) -> String {
     "已停止本地 DNS 代理".to_string()
 }
 
+fn restore_browser_sessions(app: AppHandle) {
+    let state = app.state::<AppState>();
+    let settings = state
+        .settings
+        .lock()
+        .map(|settings| settings.clone())
+        .unwrap_or_default();
+
+    let mut sessions = load_sessions_from_disk(&app);
+    if sessions.is_empty() {
+        sessions = discover_browser_sessions(&app);
+    } else {
+        // The session file is only kept across an in-app update. Trust it and
+        // verify Chromium sessions through their local DevTools port, so the
+        // startup path does not spawn PowerShell/CIM scans that compete with
+        // WebView2 initialization on Windows.
+        sessions.retain(|session| {
+            session.kind != "chromium" || marker::is_running(Path::new(&session.profile_dir))
+        });
+    }
+
+    let mut restored = Vec::new();
+    let mut started_envs = HashSet::new();
+    for session in sessions {
+        let Ok(profile) = profile_for(&session.env) else {
+            continue;
+        };
+        let Ok(dns) = validate_dns(&dns_for(&settings, &session.env)) else {
+            continue;
+        };
+        let Ok(color) = validate_color(&color_for(&settings, &session.env)) else {
+            continue;
+        };
+
+        if !started_envs.contains(&session.env) {
+            let mut last_error = None;
+            for attempt in 0..2 {
+                match ensure_proxy(&app, &state, profile, &dns, &color) {
+                    Ok(()) => {
+                        started_envs.insert(session.env.clone());
+                        last_error = None;
+                        break;
+                    }
+                    Err(error) => {
+                        last_error = Some(error);
+                        if attempt == 0 {
+                            std::thread::sleep(Duration::from_millis(700));
+                        }
+                    }
+                }
+            }
+            if let Some(error) = last_error {
+                eprintln!("[restore] 恢复{}代理失败: {error}", profile.label);
+                restored.push(session);
+                continue;
+            }
+        }
+
+        if session.kind == "chromium" {
+            start_marker(
+                &state,
+                profile,
+                &color,
+                &dns,
+                PathBuf::from(&session.profile_dir),
+            );
+        }
+        restored.push(session);
+    }
+
+    if let Ok(mut current) = state.sessions.lock() {
+        for session in current.iter() {
+            if session_alive(session)
+                && !restored
+                    .iter()
+                    .any(|item| item.profile_dir == session.profile_dir)
+            {
+                restored.push(session.clone());
+            }
+        }
+        *current = restored.clone();
+    }
+    let _ = save_sessions_to_disk(&app, &restored);
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        state.hidden_by_user.store(false, Ordering::SeqCst);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn hide_main_window(app: &AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        state.hidden_by_user.store(true, Ordering::SeqCst);
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+    }
+}
+
+fn cleanup_before_exit(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    if state.cleaned.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    stop_all_proxies(app);
+    let mode = state
+        .exit_mode
+        .lock()
+        .map(|mode| *mode)
+        .unwrap_or(ExitMode::Normal);
+    if mode != ExitMode::Normal {
+        return;
+    }
+
+    let mut sessions = state
+        .sessions
+        .lock()
+        .map(|sessions| sessions.clone())
+        .unwrap_or_default();
+    for discovered in discover_browser_sessions(app) {
+        if !sessions
+            .iter()
+            .any(|session| session.profile_dir == discovered.profile_dir)
+        {
+            sessions.push(discovered);
+        }
+    }
+    for session in &sessions {
+        close_browser_session(session);
+    }
+    if let Ok(mut current) = state.sessions.lock() {
+        current.clear();
+    }
+    if let Ok(path) = sessions_path(app) {
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn quit_app(app: &AppHandle) {
+    if let Ok(mut mode) = app.state::<AppState>().exit_mode.lock() {
+        *mode = ExitMode::Normal;
+    }
+    cleanup_before_exit(app);
+    app.exit(0);
+}
+
+#[tauri::command]
+fn ui_ready(app: AppHandle) {
+    let state = app.state::<AppState>();
+    state.ui_ready.store(true, Ordering::SeqCst);
+    if !state.hidden_by_user.load(Ordering::SeqCst) {
+        show_main_window(&app);
+    }
+}
+
 #[tauri::command]
 fn app_version() -> update::AppVersion {
     update::AppVersion {
@@ -864,6 +1395,9 @@ async fn download_and_install(
     })
     .await
     .map_err(|error| format!("下载更新失败: {error}"))??;
+    if let Ok(mut mode) = exit_app.state::<AppState>().exit_mode.lock() {
+        *mode = ExitMode::Update;
+    }
     stop_all_proxies(&exit_app);
     let handle = exit_app.clone();
     std::thread::spawn(move || {
@@ -881,22 +1415,90 @@ fn open_external_url(url: String) -> Result<(), String> {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            show_main_window(app);
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .setup(|app| {
-            let settings = load_settings_from_disk(app.handle());
+            let handle = app.handle().clone();
+            let settings = load_settings_from_disk(&handle);
             let state = app.state::<AppState>();
             *state.settings.lock().unwrap() = settings;
+            *state.sessions.lock().unwrap() = load_sessions_from_disk(&handle);
+
+            let show_item = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+            let quit_item =
+                MenuItem::with_id(app, "quit", "退出并关闭浏览器", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+            let mut tray_builder = TrayIconBuilder::new()
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .tooltip("DualDNS Browser")
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => show_main_window(app),
+                    "quit" => quit_app(app),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
+                    }
+                });
+            if let Some(icon) = app.default_window_icon() {
+                tray_builder = tray_builder.icon(icon.clone());
+            }
+            let tray = tray_builder.build(app)?;
+            *state.tray.lock().unwrap() = Some(tray);
+
+            let fallback = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(7));
+                let state = fallback.state::<AppState>();
+                if !state.ui_ready.load(Ordering::SeqCst)
+                    && !state.hidden_by_user.load(Ordering::SeqCst)
+                {
+                    show_main_window(&fallback);
+                }
+            });
+
+            std::thread::spawn(move || {
+                #[cfg(target_os = "windows")]
+                {
+                    let deadline = Instant::now() + Duration::from_secs(8);
+                    while Instant::now() < deadline {
+                        if handle.state::<AppState>().ui_ready.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(150));
+                    }
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+                restore_browser_sessions(handle);
+            });
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let state = window.app_handle().state::<AppState>();
+                if state.cleaned.load(Ordering::SeqCst) {
+                    return;
+                }
+                api.prevent_close();
+                hide_main_window(window.app_handle());
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_settings,
+            ui_ready,
             save_settings,
             open_env,
             get_status,
@@ -911,5 +1513,9 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building DualDNS Browser");
 
-    app.run(|_app_handle, _event| {});
+    app.run(|app_handle, event| {
+        if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
+            cleanup_before_exit(app_handle);
+        }
+    });
 }

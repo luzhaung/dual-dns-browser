@@ -2036,6 +2036,18 @@ button:disabled {
   }
 }
 
+html[data-platform="windows"] .ambient {
+  display: none;
+}
+
+html[data-platform="windows"] .help-button,
+html[data-platform="windows"] .version-button,
+html[data-platform="windows"] .card,
+html[data-platform="windows"] .help-backdrop,
+html[data-platform="windows"] .toast {
+  backdrop-filter: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

@@ -4,7 +4,7 @@ use std::{
     fs,
     io::{Read, Write},
     net::TcpStream,
-    path::PathBuf,
+    path::{Path, PathBuf},
     thread,
     time::Duration,
 };
@@ -84,7 +84,7 @@ fn marker_script(key: &str, label: &str, color: &str, dns: &str) -> String {
     TARGET_SCRIPT.replace("__CFG__", &cfg.to_string())
 }
 
-fn read_devtools_port(profile_dir: &PathBuf) -> Option<u16> {
+fn read_devtools_port(profile_dir: &Path) -> Option<u16> {
     let text = fs::read_to_string(profile_dir.join("DevToolsActivePort")).ok()?;
     let port = text.lines().next()?.trim().parse::<u16>().ok()?;
     if port == 0 {
@@ -143,6 +143,13 @@ fn list_pages(port: u16) -> Option<Vec<Value>> {
     let split = response.windows(4).position(|w| w == b"\r\n\r\n")?;
     let body = &response[split + 4..];
     serde_json::from_slice(body).ok()
+}
+
+pub fn is_running(profile_dir: &Path) -> bool {
+    let Some(port) = read_devtools_port(profile_dir) else {
+        return false;
+    };
+    list_pages(port).is_some()
 }
 
 fn content_length(headers: &[u8]) -> usize {

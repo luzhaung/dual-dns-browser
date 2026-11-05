@@ -91,7 +91,7 @@ let updateBusy = false;
 let updateInstallBusy = false;
 let updateInstallLink = null;
 let updateSource = readStorage("dualdns.updateSource", "auto");
-let currentVersion = "1.1.5";
+let currentVersion = "1.1.6";
 let currentPlatformLabel = "";
 let dismissedUpdate = readStorage("dualdns.dismissedUpdate", "");
 

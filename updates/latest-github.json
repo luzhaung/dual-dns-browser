@@ -1,21 +1,21 @@
 {
-  "version": "1.1.5",
-  "published_at": "2026-11-05T06:12:47.491Z",
-  "notes": "修复并优化 Windows 首次启动白屏，同时改进关闭与更新重启行为。\n\n- 主窗口改为界面首帧准备好后再显示，避免 Windows WebView2 初始化期间出现长时间白屏。\n- Windows 端延后并简化浏览器会话恢复，不再在启动时反复调用 PowerShell 扫描进程，减少与 WebView2 初始化争抢 CPU 和磁盘。\n- Windows 端关闭背景模糊等高开销视觉效果，首屏渲染更轻量。\n- Chrome / Edge 启动参数补充关闭后台联网、组件更新和默认应用初始化，缩短首次打开浏览器的等待时间。\n- 点击 × 现在隐藏到系统托盘，代理继续运行；托盘菜单“退出并关闭浏览器”才会彻底退出并关闭本应用启动的浏览器。\n- 应用内更新重启后会自动检测仍在运行的浏览器，并恢复对应环境的代理与页面标识。\n- 更新帮助与常见问题说明。",
-  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.1.5",
+  "version": "1.1.6",
+  "published_at": "2026-11-05T07:02:32.905Z",
+  "notes": "修复 Windows 应用内更新无反应，并加快 Windows 打开浏览器的速度。\n\n- Windows 应用内更新改为直接启动 NSIS 安装程序，不再依赖会在应用退出时被一起结束的隐藏 PowerShell 等待进程。\n- Windows 更新时显示安装进度窗口，安装完成后通过 `/R` 自动重新打开新版本；如果安装失败，可查看 `%TEMP%\\dualdns-update.log` 排查。\n- 去掉打开浏览器热路径里的 PowerShell/WMI 进程扫描，避免每次点击“打开内网/外网”都等待数秒。\n- 应用启动后在后台预热内网、外网两个本地 DNS 代理，第一次点击打开浏览器时不再等待代理冷启动。\n- 打开浏览器、刷新状态、停止代理和保存配置改为后台执行，避免 Windows 界面在等待时卡住。\n- 环境色边框只在浏览器顶层页面绘制，不再重复画到页面内部的 iframe 上。",
+  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.1.6",
   "downloads": {
-    "macos-aarch64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.1.5/DualDNS-Browser-1.1.5-macOS-AppleSilicon.dmg",
-    "macos-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.1.5/DualDNS-Browser-1.1.5-macOS-Intel.dmg",
-    "windows-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.1.5/DualDNS-Browser-1.1.5-Windows-x64-Setup.exe"
+    "macos-aarch64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.1.6/DualDNS-Browser-1.1.6-macOS-AppleSilicon.dmg",
+    "macos-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.1.6/DualDNS-Browser-1.1.6-macOS-Intel.dmg",
+    "windows-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.1.6/DualDNS-Browser-1.1.6-Windows-x64-Setup.exe"
   },
   "checksums": {
-    "macos-aarch64": "4eee7a78d21a7889719c6ad50775ecd9613872f3a83a4e06da21593dee7be572",
-    "macos-x86_64": "45f7b863993b5ad30181971eb508a4b7fca2e2472bed157f899b6655268d83d3",
-    "windows-x86_64": "d2424759d38d96a6d5a3d2da2b28d9d8b98991eb812a58206052dff93036adc9"
+    "macos-aarch64": "f77e03b11413875398a013cb75f74c13f35b753811af43e39f8d59243bc843b2",
+    "macos-x86_64": "b08e820879784fa2559d16ecd1bfae80e021873059417ada4c3426b9bf9ffe4b",
+    "windows-x86_64": "d0578a3c83617662f8f936903d8d83d018f96100a4148b8981840ef47b4de7c7"
   },
   "sizes": {
-    "macos-aarch64": 5367352,
-    "macos-x86_64": 5904250,
-    "windows-x86_64": 4068488
+    "macos-aarch64": 5376850,
+    "macos-x86_64": 5916261,
+    "windows-x86_64": 4075813
   }
 }

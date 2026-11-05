@@ -827,66 +827,57 @@ rm -rf "$work_dir"
 
 #[cfg(target_os = "windows")]
 fn install_windows(installer: &Path) -> Result<String, String> {
-    use std::os::windows::process::CommandExt;
-
     let current_exe = env::current_exe().map_err(|error| format!("无法定位当前应用: {error}"))?;
-    let work_dir = installer
-        .parent()
-        .ok_or_else(|| "无法定位更新临时目录".to_string())?;
-    let script = work_dir.join("install-update.ps1");
-    fs::write(
-        &script,
-        r#"param(
-  [Parameter(Mandatory=$true)][int]$AppPid,
-  [Parameter(Mandatory=$true)][string]$Installer,
-  [Parameter(Mandatory=$true)][string]$AppExe
-)
-$ErrorActionPreference = "SilentlyContinue"
-while (Get-Process -Id $AppPid -ErrorAction SilentlyContinue) {
-  Start-Sleep -Milliseconds 400
-}
-Start-Sleep -Milliseconds 500
-$process = Start-Process -FilePath $Installer -ArgumentList "/S" -PassThru -Wait
-$exitCode = if ($process) { $process.ExitCode } else { -1 }
-if ($exitCode -ne 0) {
-  $message = "更新安装未完成（退出码 $exitCode）。旧版本将重新打开，请稍后重试或打开发布页手动安装。"
-  Add-Type -AssemblyName PresentationFramework
-  [System.Windows.MessageBox]::Show($message, "DualDNS 更新失败", "OK", "Warning") | Out-Null
-}
-if (Test-Path -LiteralPath $AppExe) {
-  $running = Get-Process | Where-Object {
-    $_.Path -and [string]::Equals($_.Path, $AppExe, [System.StringComparison]::OrdinalIgnoreCase)
-  }
-  if (-not $running) {
-    Start-Process -FilePath $AppExe
-  }
-}
-$workDir = Split-Path -Parent $PSCommandPath
-Start-Sleep -Seconds 2
-Remove-Item -LiteralPath $workDir -Recurse -Force
-"#,
-    )
-    .map_err(|error| format!("创建安装脚本失败: {error}"))?;
-    Command::new("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-WindowStyle",
-            "Hidden",
-            "-File",
-        ])
-        .arg(&script)
-        .arg("-AppPid")
-        .arg(std::process::id().to_string())
-        .arg("-Installer")
-        .arg(installer)
-        .arg("-AppExe")
-        .arg(current_exe)
-        .creation_flags(0x08000000)
+    let log_path = env::temp_dir().join("dualdns-update.log");
+    let line = format!(
+        "[{}] launching installer={} current_exe={}\n",
+        now_millis(),
+        installer.display(),
+        current_exe.display()
+    );
+    if let Ok(mut log) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        let _ = log.write_all(line.as_bytes());
+    }
+
+    // Launch the NSIS installer directly instead of asking a hidden
+    // PowerShell process to wait for us to exit. The old watcher could be
+    // torn down together with the app, which left the user with no installer
+    // window and an unchanged version.
+    //
+    // /P shows a small progress window (passive mode), /R restarts the app
+    // after a successful install, and /UPDATE keeps update semantics for the
+    // uninstaller. The installer's Restart Manager closes this process before
+    // replacing files; the installer itself is already a separate process and
+    // keeps running.
+    let child = Command::new(installer)
+        .args(["/P", "/R", "/UPDATE"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
-        .map_err(|error| format!("启动安装进程失败: {error}"))?;
-    Ok("更新包已校验，安装程序将自动完成更新并重启应用。".to_string())
+        .map_err(|error| format!("启动安装程序失败: {error}"))?;
+
+    if let Ok(mut log) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        let _ = writeln!(log, "[{}] installer pid={}", now_millis(), child.id());
+    }
+
+    Ok("更新包已校验，正在启动安装程序。应用会自动关闭并在安装完成后重新打开。".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn now_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_millis())
+        .unwrap_or(0)
 }
 
 fn cleanup_work_dir(work_dir: &Path) {
@@ -895,12 +886,16 @@ fn cleanup_work_dir(work_dir: &Path) {
     }
 }
 
-pub fn download_and_install(
+pub fn download_and_install<F>(
     app: &AppHandle,
     url: &str,
     expected_sha256: &str,
     version: &str,
-) -> Result<InstallResult, String> {
+    before_install: F,
+) -> Result<InstallResult, String>
+where
+    F: FnOnce(),
+{
     let url = url.trim();
     let expected_sha256 = expected_sha256.trim().to_ascii_lowercase();
     validate_install_url(url)?;
@@ -947,6 +942,7 @@ pub fn download_and_install(
         return Err("更新包 SHA256 校验失败，文件可能不完整或被篡改，已阻止安装".to_string());
     }
 
+    before_install();
     let install_result = {
         #[cfg(target_os = "macos")]
         {

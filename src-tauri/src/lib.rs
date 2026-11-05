@@ -62,11 +62,13 @@ struct AppState {
     markers: Mutex<HashMap<String, std::thread::JoinHandle<()>>>,
     sessions: Mutex<Vec<BrowserSession>>,
     tray: Mutex<Option<TrayIcon>>,
-    proxy_lock: Mutex<()>,
+    internal_proxy_lock: Mutex<()>,
+    external_proxy_lock: Mutex<()>,
     exit_mode: Mutex<ExitMode>,
     cleaned: AtomicBool,
     ui_ready: AtomicBool,
     hidden_by_user: AtomicBool,
+    prewarmed: AtomicBool,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -299,7 +301,9 @@ fn find_browser_pid(profile_dir: &Path) -> Option<u32> {
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         let line = line.trim_start();
         let mut parts = line.splitn(2, |c: char| c.is_whitespace());
-        let Some(pid_text) = parts.next().filter(|value| value.chars().all(|c| c.is_ascii_digit()))
+        let Some(pid_text) = parts
+            .next()
+            .filter(|value| value.chars().all(|c| c.is_ascii_digit()))
         else {
             continue;
         };
@@ -332,7 +336,10 @@ fn find_browser_pid(profile_dir: &Path) -> Option<u32> {
     if !profile_dir.is_dir() {
         return None;
     }
-    let needle = profile_dir.to_string_lossy().to_lowercase().replace('\'', "''");
+    let needle = profile_dir
+        .to_string_lossy()
+        .to_lowercase()
+        .replace('\'', "''");
     let script = format!(
         "$needle = '{needle}'; \
          $procs = Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -and $_.CommandLine.ToLower().Contains($needle) }}; \
@@ -397,8 +404,8 @@ fn session_alive(session: &BrowserSession) -> bool {
     if !profile_dir.is_dir() {
         return false;
     }
-    if session.kind == "chromium" && marker::is_running(profile_dir) {
-        return true;
+    if session.kind == "chromium" {
+        return marker::is_running(profile_dir) || (session.pid > 0 && process_exists(session.pid));
     }
     (session.pid > 0 && process_matches(session.pid, profile_dir))
         || find_browser_pid(profile_dir).is_some()
@@ -511,9 +518,10 @@ fn record_browser_session(app: &AppHandle, state: &AppState, session: BrowserSes
         .iter_mut()
         .find(|item| item.env == session.env && item.profile_dir == session.profile_dir)
     {
-        if existing.pid == 0 || !session_alive(existing) {
-            *existing = session;
-        }
+        // We just launched this profile, so its new PID is authoritative. Avoid
+        // spawning PowerShell/CIM scans here: this path runs on every browser
+        // open and used to add seconds of delay on Windows.
+        *existing = session;
     } else {
         sessions.push(session);
     }
@@ -529,9 +537,7 @@ fn fetch_health(port: u16) -> Option<ProxyHealth> {
     stream.set_read_timeout(Some(timeout)).ok()?;
     stream.set_write_timeout(Some(timeout)).ok()?;
     stream
-        .write_all(
-            b"GET /__ddb/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
-        )
+        .write_all(b"GET /__ddb/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
         .ok()?;
     let mut response = String::new();
     stream.read_to_string(&mut response).ok()?;
@@ -585,9 +591,18 @@ fn stop_proxy_handle(state: &AppState, env: &str) {
     }
 }
 
+fn proxy_lock_for<'a>(state: &'a AppState, env: &str) -> &'a Mutex<()> {
+    if env == "internal" {
+        &state.internal_proxy_lock
+    } else {
+        &state.external_proxy_lock
+    }
+}
+
 fn stop_all_proxies(app: &AppHandle) {
     let state = app.state::<AppState>();
-    let _guard = state.proxy_lock.lock();
+    let _internal = state.internal_proxy_lock.lock();
+    let _external = state.external_proxy_lock.lock();
     stop_proxy_handle(&state, "internal");
     stop_proxy_handle(&state, "external");
     request_shutdown(INTERNAL_PORT);
@@ -601,8 +616,7 @@ fn ensure_proxy(
     dns: &str,
     color: &str,
 ) -> Result<(), String> {
-    let _guard = state
-        .proxy_lock
+    let _guard = proxy_lock_for(state, profile.key)
         .lock()
         .map_err(|_| "内部状态错误".to_string())?;
     let owned_by_current_app = state
@@ -823,9 +837,7 @@ fn window_placement(app: &AppHandle, layout: WindowLayout) -> Option<WindowPlace
         WindowLayout::SplitLeft | WindowLayout::SplitRight => {
             let margin = 16.0;
             let gap = 14.0;
-            let width = ((screen_w - margin * 2.0 - gap) / 2.0)
-                .floor()
-                .max(520.0);
+            let width = ((screen_w - margin * 2.0 - gap) / 2.0).floor().max(520.0);
             let height = (screen_h - margin * 2.0).floor().max(560.0);
             let left = screen_x + margin;
             let x = if matches!(layout, WindowLayout::SplitLeft) {
@@ -899,10 +911,7 @@ fn launch_chromium(
     }
     if let Some(placement) = window_placement(app, layout) {
         command
-            .arg(format!(
-                "--window-position={},{}",
-                placement.x, placement.y
-            ))
+            .arg(format!("--window-position={},{}", placement.x, placement.y))
             .arg(format!(
                 "--window-size={},{}",
                 placement.width, placement.height
@@ -1049,11 +1058,14 @@ async fn pick_browser(app: AppHandle) -> Option<BrowserOption> {
 }
 
 #[tauri::command]
-fn save_settings(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    settings: Settings,
-) -> Result<String, String> {
+async fn save_settings(app: AppHandle, settings: Settings) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || save_settings_blocking(app, settings))
+        .await
+        .map_err(|error| format!("保存配置失败: {error}"))?
+}
+
+fn save_settings_blocking(app: AppHandle, settings: Settings) -> Result<String, String> {
+    let state = app.state::<AppState>();
     let browser_path = settings.browser_path.trim().to_string();
     if !browser_path.is_empty() && !Path::new(&browser_path).is_file() {
         return Err(format!("浏览器路径不存在：{browser_path}"));
@@ -1071,6 +1083,8 @@ fn save_settings(
         .lock()
         .map_err(|_| "内部状态错误".to_string())? = normalized;
     stop_all_proxies(&app);
+    state.prewarmed.store(false, Ordering::SeqCst);
+    prewarm_proxies(app.clone());
     Ok("配置已保存，下次打开浏览器窗口时生效".to_string())
 }
 
@@ -1100,12 +1114,22 @@ fn start_marker(
 }
 
 #[tauri::command]
-fn open_env(
+async fn open_env(
     app: AppHandle,
-    state: State<'_, AppState>,
     env: String,
     layout: Option<String>,
 ) -> Result<OpenResult, String> {
+    tauri::async_runtime::spawn_blocking(move || open_env_blocking(app, env, layout))
+        .await
+        .map_err(|error| format!("打开浏览器失败: {error}"))?
+}
+
+fn open_env_blocking(
+    app: AppHandle,
+    env: String,
+    layout: Option<String>,
+) -> Result<OpenResult, String> {
+    let state = app.state::<AppState>();
     let profile = profile_for(&env)?;
     let settings = state
         .settings
@@ -1158,7 +1182,19 @@ fn open_env(
 }
 
 #[tauri::command]
-fn get_status(state: State<'_, AppState>) -> AppStatus {
+async fn get_status(app: AppHandle) -> AppStatus {
+    tauri::async_runtime::spawn_blocking(move || get_status_blocking(&app))
+        .await
+        .unwrap_or_else(|_| AppStatus {
+            internal_running: false,
+            external_running: false,
+            browser: "未找到浏览器".to_string(),
+            browser_path: String::new(),
+        })
+}
+
+fn get_status_blocking(app: &AppHandle) -> AppStatus {
+    let state = app.state::<AppState>();
     let internal = fetch_health(INTERNAL_PORT)
         .map(|health| health.ok && health.app.as_deref() == Some("dualdns"))
         .unwrap_or(false);
@@ -1185,9 +1221,44 @@ fn get_status(state: State<'_, AppState>) -> AppStatus {
 }
 
 #[tauri::command]
-fn stop_proxies(app: AppHandle) -> String {
-    stop_all_proxies(&app);
-    "已停止本地 DNS 代理".to_string()
+async fn stop_proxies(app: AppHandle) -> String {
+    tauri::async_runtime::spawn_blocking(move || {
+        stop_all_proxies(&app);
+        "已停止本地 DNS 代理".to_string()
+    })
+    .await
+    .unwrap_or_else(|_| "停止本地 DNS 代理失败".to_string())
+}
+
+fn prewarm_proxies(app: AppHandle) {
+    let state = app.state::<AppState>();
+    if state.prewarmed.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let settings = state
+        .settings
+        .lock()
+        .map(|settings| settings.clone())
+        .unwrap_or_default();
+
+    for env in ["internal", "external"] {
+        let Ok(profile) = profile_for(env) else {
+            continue;
+        };
+        let Ok(dns) = validate_dns(&dns_for(&settings, env)) else {
+            continue;
+        };
+        let Ok(color) = validate_color(&color_for(&settings, env)) else {
+            continue;
+        };
+        let app = app.clone();
+        std::thread::spawn(move || {
+            // Let the first UI frame settle before starting the sidecars.
+            std::thread::sleep(Duration::from_millis(350));
+            let state = app.state::<AppState>();
+            let _ = ensure_proxy(&app, &state, profile, &dns, &color);
+        });
+    }
 }
 
 fn restore_browser_sessions(app: AppHandle) {
@@ -1358,6 +1429,7 @@ fn ui_ready(app: AppHandle) {
     if !state.hidden_by_user.load(Ordering::SeqCst) {
         show_main_window(&app);
     }
+    prewarm_proxies(app.clone());
 }
 
 #[tauri::command]
@@ -1390,15 +1462,37 @@ async fn download_and_install(
     version: String,
 ) -> Result<update::InstallResult, String> {
     let exit_app = app.clone();
+    let prepare_app = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        update::download_and_install(&app, &url, &sha256, &version)
+        update::download_and_install(&app, &url, &sha256, &version, || {
+            if let Ok(mut mode) = prepare_app.state::<AppState>().exit_mode.lock() {
+                *mode = ExitMode::Update;
+            }
+            // The Windows installer replaces files in the install directory;
+            // stop the sidecars before it starts so they do not lock anything.
+            stop_all_proxies(&prepare_app);
+            std::thread::sleep(Duration::from_millis(250));
+        })
     })
     .await
-    .map_err(|error| format!("下载更新失败: {error}"))??;
+    .map_err(|error| format!("下载更新失败: {error}"))?;
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            if let Ok(mut mode) = exit_app.state::<AppState>().exit_mode.lock() {
+                *mode = ExitMode::Normal;
+            }
+            exit_app
+                .state::<AppState>()
+                .prewarmed
+                .store(false, Ordering::SeqCst);
+            prewarm_proxies(exit_app.clone());
+            return Err(error);
+        }
+    };
     if let Ok(mut mode) = exit_app.state::<AppState>().exit_mode.lock() {
         *mode = ExitMode::Update;
     }
-    stop_all_proxies(&exit_app);
     let handle = exit_app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(1400));
@@ -1428,8 +1522,7 @@ pub fn run() {
             *state.sessions.lock().unwrap() = load_sessions_from_disk(&handle);
 
             let show_item = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
-            let quit_item =
-                MenuItem::with_id(app, "quit", "退出并关闭浏览器", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "退出并关闭浏览器", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
             let mut tray_builder = TrayIconBuilder::new()
                 .menu(&menu)

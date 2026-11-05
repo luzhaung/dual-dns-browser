@@ -19,6 +19,13 @@ const TARGET_SCRIPT: &str = r#"(() => {
     label: cfg.label,
     dns: cfg.dns,
   });
+  let isTopFrame = true;
+  try {
+    isTopFrame = window.top === window.self;
+  } catch (_) {
+    isTopFrame = false;
+  }
+  if (!isTopFrame) return;
   if (window.__DUALDNS_MARKER_BOOTED__) return;
   window.__DUALDNS_MARKER_BOOTED__ = true;
   const HOST_ID = "__dualdns_env_marker__";
@@ -100,12 +107,9 @@ fn list_pages(port: u16) -> Option<Vec<Value>> {
     let mut stream = TcpStream::connect_timeout(&addr, timeout).ok()?;
     stream.set_read_timeout(Some(timeout)).ok()?;
     stream.set_write_timeout(Some(timeout)).ok()?;
-    let request = format!(
-        "GET /json/list HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
-    );
-    stream
-        .write_all(request.as_bytes())
-        .ok()?;
+    let request =
+        format!("GET /json/list HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).ok()?;
     let mut response = Vec::new();
     let mut expected = None;
     loop {
@@ -165,9 +169,7 @@ fn content_length(headers: &[u8]) -> usize {
 }
 
 fn send_json(socket: &mut Socket, value: Value) -> bool {
-    socket
-        .send(Message::Text(value.to_string()))
-        .is_ok()
+    socket.send(Message::Text(value.to_string())).is_ok()
 }
 
 fn start_page_session(ws_url: &str, script: &str) {
@@ -219,9 +221,7 @@ fn start_page_session(ws_url: &str, script: &str) {
             Ok(Message::Close(_)) => break,
             Ok(Message::Text(text)) => {
                 if let Ok(value) = serde_json::from_str::<Value>(&text) {
-                    if value.get("method").and_then(Value::as_str)
-                        == Some("Page.loadEventFired")
-                    {
+                    if value.get("method").and_then(Value::as_str) == Some("Page.loadEventFired") {
                         if !evaluate(&mut socket, script, next_id) {
                             break;
                         }

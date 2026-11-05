@@ -3,6 +3,7 @@ use std::{
     collections::HashMap,
     env, fs,
     process::Command,
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -10,7 +11,9 @@ const GITEE_MANIFEST: &str =
     "https://gitee.com/phpbest/dual-dns-browser/raw/main/updates/latest-gitee.json";
 const GITHUB_MANIFEST: &str =
     "https://raw.githubusercontent.com/luzhaung/dual-dns-browser/main/updates/latest-github.json";
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const GITHUB_MIRROR: &str =
+    "https://cdn.jsdelivr.net/gh/luzhaung/dual-dns-browser@main/updates/latest-github.json";
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 
 const PLATFORM_ORDER: [&str; 3] = ["macos-aarch64", "macos-x86_64", "windows-x86_64"];
 
@@ -131,7 +134,8 @@ fn parse_version(version: &str) -> Option<(Vec<u64>, bool)> {
 fn is_newer(latest: &str, current: &str) -> bool {
     match (parse_version(latest), parse_version(current)) {
         (Some((latest_parts, latest_pre)), Some((current_parts, current_pre))) => {
-            latest_parts > current_parts || (latest_parts == current_parts && !latest_pre && current_pre)
+            latest_parts > current_parts
+                || (latest_parts == current_parts && !latest_pre && current_pre)
         }
         _ => false,
     }
@@ -154,12 +158,24 @@ fn fetch_body(url: &str) -> Result<String, String> {
         return fs::read_to_string(url).map_err(|error| format!("读取本地清单失败: {error}"));
     }
 
+    let request_url = with_cache_buster(url);
+    match fetch_with_ureq(&request_url) {
+        Ok(body) => Ok(body),
+        Err(ureq_error) => fetch_with_curl(&request_url)
+            .map_err(|curl_error| format!("{ureq_error}；系统网络回退失败: {curl_error}")),
+    }
+}
+
+fn fetch_with_ureq(url: &str) -> Result<String, String> {
+    let tls = ureq::native_tls::TlsConnector::new()
+        .map_err(|error| format!("初始化 TLS 失败: {error}"))?;
     let agent = ureq::AgentBuilder::new()
         .timeout(REQUEST_TIMEOUT)
+        .tls_connector(Arc::new(tls))
         .user_agent(concat!("DualDNS-Browser/", env!("CARGO_PKG_VERSION")))
         .build();
     let response = agent
-        .get(&with_cache_buster(url))
+        .get(url)
         .set("Accept", "application/json")
         .call()
         .map_err(|error| match error {
@@ -169,6 +185,58 @@ fn fetch_body(url: &str) -> Result<String, String> {
     response
         .into_string()
         .map_err(|error| format!("读取更新清单失败: {error}"))
+}
+
+fn fetch_with_curl(url: &str) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    let program = "curl.exe";
+    #[cfg(not(target_os = "windows"))]
+    let program = "curl";
+
+    let mut command = Command::new(program);
+    command.args([
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--location",
+        "--max-time",
+        "15",
+        "--user-agent",
+        concat!("DualDNS-Browser/", env!("CARGO_PKG_VERSION")),
+        url,
+    ]);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+
+    let output = command
+        .output()
+        .map_err(|error| format!("无法启动系统网络工具: {error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if detail.is_empty() {
+            format!("系统网络请求失败（退出码 {:?}）", output.status.code())
+        } else {
+            detail
+        });
+    }
+    String::from_utf8(output.stdout).map_err(|error| format!("更新清单编码错误: {error}"))
+}
+
+fn manifest_urls(source: &str) -> &'static [&'static str] {
+    match source {
+        "gitee" => &[GITEE_MANIFEST],
+        "github" => &[GITHUB_MIRROR, GITHUB_MANIFEST],
+        _ => &[],
+    }
+}
+
+fn url_host(url: &str) -> &str {
+    url.split_once("://")
+        .and_then(|(_, rest)| rest.split('/').next())
+        .unwrap_or(url)
 }
 
 fn manifest_from_body(body: &str) -> Result<Manifest, String> {
@@ -231,17 +299,26 @@ pub fn check_for_updates(source: &str) -> Result<UpdateCheckResult, String> {
 
     let mut errors = Vec::new();
     for candidate in candidates {
-        let url = match (&custom_manifest, candidate) {
-            (Some(url), _) => url.clone(),
-            (None, "gitee") => GITEE_MANIFEST.to_string(),
-            (None, _) => GITHUB_MANIFEST.to_string(),
+        let urls: Vec<&str> = match &custom_manifest {
+            Some(url) => vec![url.as_str()],
+            None => manifest_urls(candidate).to_vec(),
         };
-        match fetch_body(&url)
-            .and_then(|body| manifest_from_body(&body))
-            .map(|manifest| build_result(candidate, manifest))
-        {
-            Ok(result) => return Ok(result),
-            Err(error) => errors.push(format!("{}：{}", source_label(candidate), error)),
+        let mut source_errors = Vec::new();
+        for url in urls {
+            match fetch_body(url)
+                .and_then(|body| manifest_from_body(&body))
+                .map(|manifest| build_result(candidate, manifest))
+            {
+                Ok(result) => return Ok(result),
+                Err(error) => source_errors.push(format!("{} {}", url_host(url), error)),
+            }
+        }
+        if !source_errors.is_empty() {
+            errors.push(format!(
+                "{}：{}",
+                source_label(candidate),
+                source_errors.join("；")
+            ));
         }
     }
 
@@ -256,7 +333,10 @@ pub fn open_external_url(url: &str) -> Result<(), String> {
     let allowed = url.starts_with("https://")
         || url.starts_with("http://127.0.0.1")
         || url.starts_with("http://localhost");
-    if !allowed || url.chars().any(|character| character.is_whitespace() || character.is_control())
+    if !allowed
+        || url
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
     {
         return Err("更新链接无效，已阻止打开".to_string());
     }

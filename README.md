@@ -87,10 +87,10 @@ updates/          Gitee / GitHub 更新清单
 
 ```json
 {
-  "version": "1.1.1",
+  "version": "1.1.2",
   "published_at": "2026-11-05T12:00:00Z",
   "notes": "更新内容",
-  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.1.1",
+  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.1.2",
   "downloads": {
     "macos-aarch64": "https://example.com/apple.dmg",
     "macos-x86_64": "https://example.com/intel.dmg",
@@ -99,7 +99,7 @@ updates/          Gitee / GitHub 更新清单
 }
 ```
 
-应用请求清单时会附加时间戳参数避免 CDN 缓存。自动模式先请求 Gitee，5 秒超时或失败后切换 GitHub。
+应用请求清单时会附加时间戳参数避免 CDN 缓存。自动模式先请求 Gitee，超时或失败后切换 GitHub；GitHub 源直连失败时会自动回退到 CDN 镜像。
 
 ## Author
 

@@ -79,7 +79,7 @@ let updateReturnFocus = null;
 let updateInfo = null;
 let updateBusy = false;
 let updateSource = readStorage("dualdns.updateSource", "auto");
-let currentVersion = "1.1.1";
+let currentVersion = "1.1.2";
 let currentPlatformLabel = "";
 let dismissedUpdate = readStorage("dualdns.dismissedUpdate", "");
 

@@ -42,11 +42,11 @@
 - `DualDNS-Browser-<version>-macOS-Intel.dmg`
 - `DualDNS-Browser-<version>-Windows-x64-Setup.exe`
 
-两边的 tag 必须完全一致，例如 `v1.1.1`。下载地址由脚本按以下格式生成：
+两边的 tag 必须完全一致，例如 `v1.1.2`。下载地址由脚本按以下格式生成：
 
 ```text
-https://github.com/luzhaung/dual-dns-browser/releases/download/v1.1.1/<file>
-https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.1.1/<file>
+https://github.com/luzhaung/dual-dns-browser/releases/download/v1.1.2/<file>
+https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.1.2/<file>
 ```
 
 如果你修改了 Release 的 tag 或文件名，需要同步修改 `updates/*.json`。

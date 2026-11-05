@@ -91,7 +91,7 @@ let updateBusy = false;
 let updateInstallBusy = false;
 let updateInstallLink = null;
 let updateSource = readStorage("dualdns.updateSource", "auto");
-let currentVersion = "1.1.3";
+let currentVersion = "1.1.4";
 let currentPlatformLabel = "";
 let dismissedUpdate = readStorage("dualdns.dismissedUpdate", "");
 
@@ -320,7 +320,7 @@ function openUpdates() {
       updateInfo.update_available ? "" : "success",
       updateInfo.update_available
         ? `发现新版本 v${updateInfo.latest_version}，可下载安装。`
-        : `已是最新版本（v${updateInfo.current_version}）。`,
+        : `已是最新版本（v${updateInfo.latest_version}）。`,
     );
   } else {
     checkForUpdates();
@@ -535,7 +535,7 @@ async function checkForUpdates({ startup = false } = {}) {
         result.update_available ? "" : "success",
         result.update_available
           ? `发现新版本 v${result.latest_version}，可下载安装。`
-          : `已是最新版本（v${result.current_version}）。`,
+          : `已是最新版本（v${result.latest_version}）。`,
       );
     }
   } catch (error) {

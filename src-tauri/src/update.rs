@@ -172,6 +172,16 @@ fn is_newer(latest: &str, current: &str) -> bool {
     }
 }
 
+fn is_older(latest: &str, current: &str) -> bool {
+    match (parse_version(latest), parse_version(current)) {
+        (Some((latest_parts, latest_pre)), Some((current_parts, current_pre))) => {
+            latest_parts < current_parts
+                || (latest_parts == current_parts && latest_pre && !current_pre)
+        }
+        _ => false,
+    }
+}
+
 fn with_cache_buster(url: &str) -> String {
     let separator = if url.contains('?') { '&' } else { '?' };
     let stamp = SystemTime::now()
@@ -259,7 +269,7 @@ fn fetch_with_curl(url: &str) -> Result<String, String> {
 fn manifest_urls(source: &str) -> &'static [&'static str] {
     match source {
         "gitee" => &[GITEE_MANIFEST],
-        "github" => &[GITHUB_MIRROR, GITHUB_MANIFEST],
+        "github" => &[GITHUB_MANIFEST, GITHUB_MIRROR],
         _ => &[],
     }
 }
@@ -348,6 +358,13 @@ pub fn check_for_updates(source: &str) -> Result<UpdateCheckResult, String> {
                 .and_then(|body| manifest_from_body(&body))
                 .map(|manifest| build_result(candidate, manifest))
             {
+                Ok(result) if is_older(&result.latest_version, current_version()) => {
+                    source_errors.push(format!(
+                        "{} 返回旧版本 v{}，可能是缓存未更新",
+                        url_host(url),
+                        result.latest_version
+                    ));
+                }
                 Ok(result) => return Ok(result),
                 Err(error) => source_errors.push(format!("{} {}", url_host(url), error)),
             }
@@ -1009,6 +1026,11 @@ mod tests {
         assert!(!is_newer("1.0.0", "1.0.0"));
         assert!(!is_newer("0.9.9", "1.0.0"));
         assert!(!is_newer("bad-version", "1.0.0"));
+        assert!(is_older("1.0.0-beta.1", "1.0.0"));
+        assert!(is_older("0.9.9", "1.0.0"));
+        assert!(!is_older("1.0.0", "1.0.0"));
+        assert!(!is_older("1.0.1", "1.0.0"));
+        assert!(!is_older("bad-version", "1.0.0"));
     }
 
     #[test]
@@ -1057,6 +1079,11 @@ mod tests {
         assert!(is_valid_sha256(&"a".repeat(64)));
         assert!(!is_valid_sha256("abc"));
         assert!(!is_valid_sha256(&"g".repeat(64)));
+    }
+
+    #[test]
+    fn github_prefers_the_direct_manifest() {
+        assert_eq!(manifest_urls("github"), &[GITHUB_MANIFEST, GITHUB_MIRROR]);
     }
 
     #[test]

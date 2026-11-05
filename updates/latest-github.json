@@ -1,21 +1,21 @@
 {
-  "version": "1.1.3",
-  "published_at": "2026-11-05T03:32:38.379Z",
-  "notes": "新增应用内下载并安装更新。\n\n发现新版本后，点击“立即更新到 vX”即可在应用内完成下载，不再跳转浏览器。下载过程会显示实时进度，安装前自动校验 SHA256；校验通过后应用会退出，替换为新版本并自动重启。\n\n更新弹窗重新整理了当前设备与其他平台的下载入口：当前设备使用明确的主按钮，其他平台收进次级列表，不再使用容易误解的下载箭头。\n\nmacOS 应用内更新要求应用位于可写的“应用程序”目录；Windows 会静默运行 NSIS 安装程序，安装异常时会重新打开旧版本。更新失败也可以使用“打开发布页”手动下载。DNS 配置和两个浏览器的登录状态会保留。",
-  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.1.3",
+  "version": "1.1.4",
+  "published_at": "2026-11-05T04:20:37.405Z",
+  "notes": "修复 GitHub 更新源可能显示旧版本的问题。\n\nGitHub 检查更新现在优先读取 GitHub 原始更新清单，只有直连失败时才回退到 CDN 镜像，避免镜像缓存较旧时把 `v1.1.1` 误显示为最新版本。\n\n如果更新源返回的版本低于当前版本，应用会将其识别为过期清单，继续尝试其他地址，不再显示“已是最新”而版本号却更低。更新提示中的版本号也已统一使用清单返回的最新版本。",
+  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.1.4",
   "downloads": {
-    "macos-aarch64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.1.3/DualDNS-Browser-1.1.3-macOS-AppleSilicon.dmg",
-    "macos-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.1.3/DualDNS-Browser-1.1.3-macOS-Intel.dmg",
-    "windows-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.1.3/DualDNS-Browser-1.1.3-Windows-x64-Setup.exe"
+    "macos-aarch64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.1.4/DualDNS-Browser-1.1.4-macOS-AppleSilicon.dmg",
+    "macos-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.1.4/DualDNS-Browser-1.1.4-macOS-Intel.dmg",
+    "windows-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.1.4/DualDNS-Browser-1.1.4-Windows-x64-Setup.exe"
   },
   "checksums": {
-    "macos-aarch64": "610cce9e8798f525986ea20dc066309463b1382b40f73a1a2ac1700901850629",
-    "macos-x86_64": "dac6bc88dfb9d2cd11e5f80cdaeaa7c20bfdae623b945b92fb999be17cfa267c",
-    "windows-x86_64": "b2f428c580d587047dea59b099d02b8e8af80b8932b77997a1d4c44c4eff1055"
+    "macos-aarch64": "42aa6145a7e39212717351cf8caa5fa87152e61f9bebd30f84f0ce2e2368d8fe",
+    "macos-x86_64": "3ca3cca95a1e2686d7b9b4c336bedf7a99738ba78fb500e10198f325e079bdfb",
+    "windows-x86_64": "933b662f40e077119c23390f49713d26037218285f4efb39302f4543bd62cc7a"
   },
   "sizes": {
-    "macos-aarch64": 5313458,
-    "macos-x86_64": 5830058,
-    "windows-x86_64": 4032117
+    "macos-aarch64": 5314265,
+    "macos-x86_64": 5830147,
+    "windows-x86_64": 4029587
   }
 }

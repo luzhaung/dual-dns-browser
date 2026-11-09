@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -164,10 +165,15 @@ func (r *dnsResolver) exchange(ctx context.Context, name string, qtype uint16) (
 }
 
 type proxyServer struct {
-	dns      string
-	color    string
-	resolver *dnsResolver
-	shutdown func()
+	dns          string
+	color        string
+	env          string
+	resolver     *dnsResolver
+	shutdown     func()
+	upstreamMode string
+	upstreamMu   sync.Mutex
+	upstream     string
+	badUpstreams map[string]time.Time
 }
 
 // Run starts the local DNS-aware HTTP/HTTPS proxy.
@@ -177,6 +183,8 @@ func Run(args []string) {
 	port := fs.Int("port", defaultPort, "listen port")
 	listen := fs.String("listen", "127.0.0.1", "listen address")
 	color := fs.String("color", "#2F7BFF", "environment accent color")
+	env := fs.String("env", "internal", "environment: internal or external")
+	upstream := fs.String("upstream", "auto", "external upstream proxy: auto, off, or host:port")
 	_ = fs.Parse(args)
 
 	if *dns == "" {
@@ -186,10 +194,22 @@ func Run(args []string) {
 		log.Fatalf("--port 无效: %d", *port)
 	}
 
+	envName := strings.ToLower(strings.TrimSpace(*env))
+	if envName != "external" {
+		envName = "internal"
+	}
+	upstreamMode := normalizeUpstreamMode(*upstream)
+	if envName != "external" {
+		upstreamMode = "off"
+	}
+
 	handler := &proxyServer{
-		dns:      *dns,
-		color:    normalizeColor(*color),
-		resolver: newDNSResolver(*dns),
+		dns:          *dns,
+		color:        normalizeColor(*color),
+		env:          envName,
+		resolver:     newDNSResolver(*dns),
+		upstreamMode: upstreamMode,
+		badUpstreams: make(map[string]time.Time),
 	}
 	addr := net.JoinHostPort(*listen, strconv.Itoa(*port))
 	server := &http.Server{
@@ -204,7 +224,11 @@ func Run(args []string) {
 			_ = server.Shutdown(context.Background())
 		}()
 	}
-	log.Printf("DNS 代理监听 %s，上游 DNS %s", addr, *dns)
+	if envName == "external" && upstreamMode != "off" {
+		log.Printf("DNS 代理监听 %s，上游 DNS %s，外网上游代理 %s", addr, *dns, upstreamMode)
+	} else {
+		log.Printf("DNS 代理监听 %s，上游 DNS %s", addr, *dns)
+	}
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
@@ -227,10 +251,12 @@ func (p *proxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case "/__ddb/health":
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"ok":   true,
-				"app":  "dualdns",
-				"dns":  p.dns,
-				"time": time.Now().Format(time.RFC3339),
+				"ok":       true,
+				"app":      "dualdns",
+				"env":      p.env,
+				"dns":      p.dns,
+				"upstream": p.upstreamSummary(),
+				"time":     time.Now().Format(time.RFC3339),
 			})
 			return
 		case "/__ddb/start":
@@ -386,6 +412,18 @@ func (p *proxyServer) resolve(ctx context.Context, host string) ([]net.IP, error
 }
 
 func (p *proxyServer) dial(ctx context.Context, host, port string) (net.Conn, error) {
+	if p.env == "external" && p.upstreamMode != "off" {
+		if conn, upstream, err := p.dialViaUpstream(ctx, host, port); err == nil {
+			log.Printf("%s:%s -> 本机代理 %s", host, port, upstream)
+			return conn, nil
+		} else if upstream != "" {
+			log.Printf("本机代理 %s 连接 %s:%s 失败: %v，改用直连", upstream, host, port, err)
+		}
+	}
+	return p.dialDirect(ctx, host, port)
+}
+
+func (p *proxyServer) dialDirect(ctx context.Context, host, port string) (net.Conn, error) {
 	ips, err := p.resolve(ctx, host)
 	if err != nil {
 		return nil, err
@@ -404,6 +442,229 @@ func (p *proxyServer) dial(ctx context.Context, host, port string) (net.Conn, er
 		return nil, fmt.Errorf("没有可用地址: %s", host)
 	}
 	return nil, fmt.Errorf("连接 %s:%s 失败: %s", host, port, strings.Join(failures, "; "))
+}
+
+func normalizeUpstreamMode(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "", "auto":
+		return "auto"
+	case "off", "none", "direct", "disabled":
+		return "off"
+	default:
+		return strings.TrimSpace(value)
+	}
+}
+
+func normalizeProxyAddr(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "http://")
+	value = strings.TrimPrefix(value, "https://")
+	value = strings.TrimSuffix(value, "/")
+	if value == "" {
+		return "", errors.New("上游代理地址为空")
+	}
+	host, port, err := net.SplitHostPort(value)
+	if err != nil {
+		return "", fmt.Errorf("无效的上游代理地址 %q: %w", value, err)
+	}
+	if host == "" || port == "" {
+		return "", fmt.Errorf("无效的上游代理地址 %q", value)
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return "", fmt.Errorf("无效的上游代理端口 %q", port)
+	}
+	return net.JoinHostPort(host, port), nil
+}
+
+var commonUpstreamAddrs = []string{
+	"127.0.0.1:7890",
+	"127.0.0.1:7897",
+	"127.0.0.1:10809",
+	"127.0.0.1:1080",
+	"127.0.0.1:6152",
+	"127.0.0.1:8889",
+}
+
+var systemProxyCache struct {
+	mu    sync.Mutex
+	value string
+	at    time.Time
+}
+
+func cachedSystemHTTPProxy() string {
+	systemProxyCache.mu.Lock()
+	defer systemProxyCache.mu.Unlock()
+	if time.Since(systemProxyCache.at) < 60*time.Second {
+		return systemProxyCache.value
+	}
+	systemProxyCache.value = systemHTTPProxy()
+	systemProxyCache.at = time.Now()
+	return systemProxyCache.value
+}
+
+func (p *proxyServer) upstreamCandidates() []string {
+	if p.env != "external" || p.upstreamMode == "off" {
+		return nil
+	}
+
+	raw := make([]string, 0, 8)
+	if p.upstreamMode != "auto" {
+		raw = append(raw, p.upstreamMode)
+	} else {
+		for _, key := range []string{"DUALDNS_UPSTREAM_PROXY", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+			if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+				raw = append(raw, value)
+			}
+		}
+		if value := cachedSystemHTTPProxy(); value != "" {
+			raw = append(raw, value)
+		}
+		raw = append(raw, commonUpstreamAddrs...)
+	}
+
+	seen := make(map[string]bool, len(raw))
+	result := make([]string, 0, len(raw))
+	for _, value := range raw {
+		addr, err := normalizeProxyAddr(value)
+		if err != nil || seen[addr] {
+			continue
+		}
+		seen[addr] = true
+		result = append(result, addr)
+	}
+	return result
+}
+
+func (p *proxyServer) upstreamBlocked(addr string) bool {
+	p.upstreamMu.Lock()
+	defer p.upstreamMu.Unlock()
+	until, ok := p.badUpstreams[addr]
+	if !ok {
+		return false
+	}
+	if time.Now().After(until) {
+		delete(p.badUpstreams, addr)
+		return false
+	}
+	return true
+}
+
+func (p *proxyServer) markUpstream(addr string, ok bool) {
+	p.upstreamMu.Lock()
+	defer p.upstreamMu.Unlock()
+	if ok {
+		p.upstream = addr
+		delete(p.badUpstreams, addr)
+		return
+	}
+	p.badUpstreams[addr] = time.Now().Add(30 * time.Second)
+	if p.upstream == addr {
+		p.upstream = ""
+	}
+}
+
+func (p *proxyServer) upstreamSummary() string {
+	if p.env != "external" || p.upstreamMode == "off" {
+		return "direct"
+	}
+	p.upstreamMu.Lock()
+	defer p.upstreamMu.Unlock()
+	if p.upstream != "" {
+		return p.upstream
+	}
+	if p.upstreamMode != "auto" {
+		return p.upstreamMode
+	}
+	return "auto"
+}
+
+func (p *proxyServer) dialViaUpstream(ctx context.Context, host, port string) (net.Conn, string, error) {
+	var lastAddr string
+	var lastErr error
+	for _, upstream := range p.upstreamCandidates() {
+		if p.upstreamBlocked(upstream) {
+			continue
+		}
+		lastAddr = upstream
+		conn, err := dialHTTPConnect(ctx, upstream, host, port)
+		if err == nil {
+			p.markUpstream(upstream, true)
+			return conn, upstream, nil
+		}
+		lastErr = err
+		var statusErr *upstreamStatusError
+		if errors.As(err, &statusErr) {
+			return nil, upstream, err
+		}
+		p.markUpstream(upstream, false)
+	}
+	if lastErr == nil {
+		lastErr = errors.New("没有找到可用的本机 HTTP 代理")
+	}
+	return nil, lastAddr, lastErr
+}
+
+func dialHTTPConnect(ctx context.Context, upstream, host, port string) (net.Conn, error) {
+	dialer := &net.Dialer{Timeout: 2 * time.Second}
+	conn, err := dialer.DialContext(ctx, "tcp", upstream)
+	if err != nil {
+		return nil, err
+	}
+
+	deadline := time.Now().Add(6 * time.Second)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	_ = conn.SetDeadline(deadline)
+
+	target := net.JoinHostPort(host, port)
+	request := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Connection: keep-alive\r\n\r\n", target, target)
+	if _, err := io.WriteString(conn, request); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+
+	reader := bufio.NewReader(conn)
+	response, err := http.ReadResponse(reader, &http.Request{Method: http.MethodConnect})
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if response.StatusCode != http.StatusOK {
+		_ = conn.Close()
+		return nil, &upstreamStatusError{status: response.Status}
+	}
+	_ = conn.SetDeadline(time.Time{})
+	if reader.Buffered() > 0 {
+		return &bufferedConn{Conn: conn, reader: reader}, nil
+	}
+	return conn, nil
+}
+
+type upstreamStatusError struct {
+	status string
+}
+
+func (e *upstreamStatusError) Error() string {
+	return "本机代理返回 " + e.status
+}
+
+type bufferedConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) {
+	return c.reader.Read(p)
+}
+
+func (c *bufferedConn) CloseWrite() error {
+	if tcp, ok := c.Conn.(*net.TCPConn); ok {
+		return tcp.CloseWrite()
+	}
+	return nil
 }
 
 func splitTarget(target string, defaultPort string) (string, string, error) {
@@ -466,8 +727,8 @@ func (p *proxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	done := make(chan struct{}, 1)
 	go func() {
 		_, _ = io.Copy(upstream, clientReader)
-		if tcp, ok := upstream.(*net.TCPConn); ok {
-			_ = tcp.CloseWrite()
+		if closer, ok := upstream.(interface{ CloseWrite() error }); ok {
+			_ = closer.CloseWrite()
 		}
 		done <- struct{}{}
 	}()

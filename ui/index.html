@@ -419,6 +419,10 @@ const info = window.__DUALDNS_ENV__;
               <p>首次启动需要初始化 WebView2 运行时，第一次打开浏览器也要创建独立配置目录，通常会比之后慢。新版本会在界面首帧准备好后再显示窗口，避免启动时出现长时间白屏；后续启动会明显更快。</p>
             </div>
             <div class="faq-item">
+              <strong>开了 Clash / VPN 的 TUN 模式后，外网窗口打不开网站？</strong>
+              <p>外网窗口会自动检测本机 Clash / VPN 的 HTTP 代理（系统代理，以及 <code>7890</code>、<code>7897</code> 等常见端口），把域名交给它解析和转发，避免 TUN 模式下直接查询 <code>8.8.8.8</code> 拿到被污染的 IP。内网窗口不会经过这个上游代理，仍然只走内网 DNS。若仍失败，请确认 Clash 的“系统代理”已开启、节点和规则可正常访问该网站，或换一个常见混合端口后重试。</p>
+            </div>
+            <div class="faq-item">
               <strong>提示端口被占用？</strong>
               <p>本机 <code>18080</code> 或 <code>18082</code> 被其他程序占用。关掉占用程序，或在底部点“停止本地代理”后重试。</p>
             </div>

@@ -90,6 +90,7 @@ struct BrowserSession {
 struct ProxyHealth {
     ok: bool,
     app: Option<String>,
+    env: Option<String>,
     dns: String,
 }
 
@@ -560,11 +561,15 @@ fn request_shutdown(port: u16) {
     let _ = stream.read(&mut response);
 }
 
-fn wait_for_health(port: u16, dns: &str) -> bool {
+fn wait_for_health(port: u16, dns: &str, env: &str) -> bool {
     let deadline = Instant::now() + Duration::from_secs(4);
     while Instant::now() < deadline {
         if let Some(health) = fetch_health(port) {
-            if health.ok && health.app.as_deref() == Some("dualdns") && health.dns == dns {
+            if health.ok
+                && health.app.as_deref() == Some("dualdns")
+                && health.env.as_deref() == Some(env)
+                && health.dns == dns
+            {
                 return true;
             }
         }
@@ -627,7 +632,11 @@ fn ensure_proxy(
 
     if let Some(health) = fetch_health(profile.port) {
         let is_ours = health.app.as_deref() == Some("dualdns");
-        if owned_by_current_app && is_ours && health.dns == dns {
+        if owned_by_current_app
+            && is_ours
+            && health.env.as_deref() == Some(profile.key)
+            && health.dns == dns
+        {
             return Ok(());
         }
         if is_ours {
@@ -648,7 +657,16 @@ fn ensure_proxy(
         .shell()
         .sidecar("dual-dns-proxy")
         .map_err(|e| format!("找不到 DNS 代理组件: {e}"))?
-        .args(["--dns", dns, "--port", port.as_str(), "--color", color]);
+        .args([
+            "--dns",
+            dns,
+            "--port",
+            port.as_str(),
+            "--color",
+            color,
+            "--env",
+            profile.key,
+        ]);
     let (mut rx, child) = command
         .spawn()
         .map_err(|e| format!("启动 DNS 代理失败: {e}"))?;
@@ -672,7 +690,7 @@ fn ensure_proxy(
         }
     });
 
-    if !wait_for_health(profile.port, dns) {
+    if !wait_for_health(profile.port, dns, profile.key) {
         let _ = child.kill();
         return Err(format!(
             "DNS 代理启动失败。请检查端口 {} 和 DNS {} 是否可用",

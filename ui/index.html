@@ -420,7 +420,7 @@ const info = window.__DUALDNS_ENV__;
             </div>
             <div class="faq-item">
               <strong>开了 Clash / VPN 的 TUN 模式后，外网窗口打不开网站？</strong>
-              <p>外网窗口会自动检测本机 Clash / VPN 的 HTTP 代理（系统代理，以及 <code>7890</code>、<code>7897</code> 等常见端口），把域名交给它解析和转发，避免 TUN 模式下直接查询 <code>8.8.8.8</code> 拿到被污染的 IP。内网窗口不会经过这个上游代理，仍然只走内网 DNS。若仍失败，请确认 Clash 的“系统代理”已开启、节点和规则可正常访问该网站，或换一个常见混合端口后重试。</p>
+              <p>外网窗口会绑定物理网卡出口，自己向填写的外网 DNS 查询并直连目标 IP，不读取本机 hosts，也不经过 Clash 的 DNS 分流规则。内网窗口仍然只走内网 DNS。若仍失败，请确认外网 DNS 和物理网卡可以正常上网。</p>
             </div>
             <div class="faq-item">
               <strong>提示端口被占用？</strong>

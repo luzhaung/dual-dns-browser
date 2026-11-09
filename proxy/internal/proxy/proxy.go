@@ -36,19 +36,27 @@ type dnsResolver struct {
 	server string
 	addr   string
 	client *mdns.Client
+	tcp    *mdns.Client
 	mu     sync.Mutex
 	cache  map[string]cacheEntry
 }
 
-func newDNSResolver(server string) *dnsResolver {
+func newDNSResolver(server string, egress *egressBinding) *dnsResolver {
 	addr := server
 	if _, _, err := net.SplitHostPort(server); err != nil {
 		addr = net.JoinHostPort(server, "53")
 	}
+	udpDialer := &net.Dialer{Timeout: 4 * time.Second}
+	tcpDialer := &net.Dialer{Timeout: 4 * time.Second}
+	if egress != nil {
+		udpDialer.LocalAddr = egress.udpAddr()
+		tcpDialer.LocalAddr = egress.tcpAddr()
+	}
 	return &dnsResolver{
 		server: server,
 		addr:   addr,
-		client: &mdns.Client{Net: "udp", Timeout: 4 * time.Second},
+		client: &mdns.Client{Net: "udp", Timeout: 4 * time.Second, Dialer: udpDialer},
+		tcp:    &mdns.Client{Net: "tcp", Timeout: 4 * time.Second, Dialer: tcpDialer},
 		cache:  make(map[string]cacheEntry),
 	}
 }
@@ -152,8 +160,7 @@ func (r *dnsResolver) exchange(ctx context.Context, name string, qtype uint16) (
 		return nil, err
 	}
 	if response.Truncated {
-		tcpClient := &mdns.Client{Net: "tcp", Timeout: 4 * time.Second}
-		response, _, err = tcpClient.ExchangeContext(ctx, request, r.addr)
+		response, _, err = r.tcp.ExchangeContext(ctx, request, r.addr)
 		if err != nil {
 			return nil, err
 		}
@@ -174,6 +181,7 @@ type proxyServer struct {
 	upstreamMu   sync.Mutex
 	upstream     string
 	badUpstreams map[string]time.Time
+	egress       *egressBinding
 }
 
 // Run starts the local DNS-aware HTTP/HTTPS proxy.
@@ -184,7 +192,7 @@ func Run(args []string) {
 	listen := fs.String("listen", "127.0.0.1", "listen address")
 	color := fs.String("color", "#2F7BFF", "environment accent color")
 	env := fs.String("env", "internal", "environment: internal or external")
-	upstream := fs.String("upstream", "auto", "external upstream proxy: auto, off, or host:port")
+	upstream := fs.String("upstream", "off", "external upstream proxy: off, auto, or host:port")
 	_ = fs.Parse(args)
 
 	if *dns == "" {
@@ -203,13 +211,19 @@ func Run(args []string) {
 		upstreamMode = "off"
 	}
 
+	var egress *egressBinding
+	if envName == "external" {
+		egress = detectEgressBinding()
+	}
+
 	handler := &proxyServer{
 		dns:          *dns,
 		color:        normalizeColor(*color),
 		env:          envName,
-		resolver:     newDNSResolver(*dns),
+		resolver:     newDNSResolver(*dns, egress),
 		upstreamMode: upstreamMode,
 		badUpstreams: make(map[string]time.Time),
+		egress:       egress,
 	}
 	addr := net.JoinHostPort(*listen, strconv.Itoa(*port))
 	server := &http.Server{
@@ -224,8 +238,15 @@ func Run(args []string) {
 			_ = server.Shutdown(context.Background())
 		}()
 	}
-	if envName == "external" && upstreamMode != "off" {
-		log.Printf("DNS 代理监听 %s，上游 DNS %s，外网上游代理 %s", addr, *dns, upstreamMode)
+	if envName == "external" {
+		if egress != nil {
+			log.Printf("DNS 代理监听 %s，外网 DNS %s，出口网卡 %s (%s)，已绕过系统 hosts 与本机代理 DNS", addr, *dns, egress.name, egress.ip)
+		} else {
+			log.Printf("DNS 代理监听 %s，外网 DNS %s，警告: 未找到可用物理网卡，可能受系统 hosts/VPN 影响", addr, *dns)
+		}
+		if upstreamMode != "off" {
+			log.Printf("外网上游代理模式: %s", upstreamMode)
+		}
 	} else {
 		log.Printf("DNS 代理监听 %s，上游 DNS %s", addr, *dns)
 	}
@@ -430,7 +451,7 @@ func (p *proxyServer) dialDirect(ctx context.Context, host, port string) (net.Co
 	}
 	var failures []string
 	for _, ip := range ips {
-		dialer := &net.Dialer{Timeout: 5 * time.Second}
+		dialer := p.dialerFor(ip, 5*time.Second)
 		conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), port))
 		if err == nil {
 			log.Printf("%s:%s -> %s", host, port, ip)
@@ -442,6 +463,15 @@ func (p *proxyServer) dialDirect(ctx context.Context, host, port string) (net.Co
 		return nil, fmt.Errorf("没有可用地址: %s", host)
 	}
 	return nil, fmt.Errorf("连接 %s:%s 失败: %s", host, port, strings.Join(failures, "; "))
+}
+
+func (p *proxyServer) dialerFor(ip net.IP, timeout time.Duration) *net.Dialer {
+	dialer := &net.Dialer{Timeout: timeout}
+	if p.egress == nil || !sameIPFamily(ip, p.egress.ip) {
+		return dialer
+	}
+	dialer.LocalAddr = p.egress.tcpAddr()
+	return dialer
 }
 
 func normalizeUpstreamMode(value string) string {

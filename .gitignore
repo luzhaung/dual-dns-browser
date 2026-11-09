@@ -6,4 +6,6 @@ src-tauri/binaries/*
 !src-tauri/binaries/.gitkeep
 dist/
 *.log
+proxy/sidecar
+proxy/sidecar.exe
 

@@ -101,10 +101,10 @@ updates/          Gitee / GitHub 更新清单
 
 ```json
 {
-  "version": "1.2.3",
+  "version": "1.2.4",
   "published_at": "2026-11-05T12:00:00Z",
   "notes": "更新内容",
-  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.2.3",
+  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.2.4",
   "downloads": {
     "macos-aarch64": "https://example.com/apple.dmg",
     "macos-x86_64": "https://example.com/intel.dmg",

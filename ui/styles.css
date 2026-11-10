@@ -2057,3 +2057,560 @@ html[data-platform="windows"] .toast {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---------- LAN transfer ---------- */
+
+.view-switch {
+  display: flex;
+  width: fit-content;
+  gap: 4px;
+  margin: 16px 0 14px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.78);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: 0 8px 22px rgba(25, 44, 75, 0.05);
+  backdrop-filter: blur(12px);
+}
+
+.view-tab {
+  position: relative;
+  padding: 7px 15px;
+  border: 0;
+  border-radius: 9px;
+  color: var(--ink-soft);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 620;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.view-tab:hover {
+  color: var(--ink);
+}
+
+.view-tab.active {
+  color: var(--ink);
+  background: #fff;
+  box-shadow: 0 3px 10px rgba(25, 44, 75, 0.10);
+}
+
+.view-tab .tab-dot {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--external);
+  box-shadow: 0 0 0 2px #fff;
+}
+
+.view[hidden] {
+  display: none;
+}
+
+.lan-hero {
+  padding: 20px 24px 18px;
+  margin-bottom: 14px;
+}
+
+.lan-self {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.lan-self-main {
+  display: flex;
+  gap: 12px;
+  min-width: 0;
+}
+
+.lan-self h2 {
+  overflow: hidden;
+  max-width: 420px;
+  font-size: 19px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lan-self h2.editing {
+  overflow: visible;
+  padding: 2px 7px;
+  border-radius: 7px;
+  outline: 1px solid rgba(47, 123, 255, 0.38);
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(47, 123, 255, 0.10);
+}
+
+.lan-self-actions {
+  display: flex;
+  flex: none;
+  gap: 10px;
+  padding-top: 2px;
+}
+
+.lan-self-actions .text-button {
+  margin-top: 0;
+}
+
+.lan-pulse {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: #c2ccda;
+  vertical-align: 1px;
+}
+
+.lan-pulse.online {
+  background: #1cb47c;
+  box-shadow: 0 0 0 3px rgba(28, 180, 124, 0.14);
+}
+
+.lan-pulse.offline {
+  background: #d4a23a;
+  box-shadow: 0 0 0 3px rgba(212, 162, 58, 0.14);
+}
+
+.lan-self-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.lan-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 3px 8px;
+  border: 1px solid rgba(19, 35, 60, 0.07);
+  border-radius: 7px;
+  color: var(--ink-soft);
+  background: rgba(244, 247, 252, 0.9);
+  font-size: 10px;
+  font-weight: 550;
+  letter-spacing: 0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lan-chip.warn {
+  color: #9a6818;
+  border-color: rgba(212, 162, 58, 0.18);
+  background: #fff8e8;
+}
+
+.lan-card {
+  padding: 20px 24px 18px;
+  margin-bottom: 14px;
+}
+
+.lan-count {
+  margin-top: 3px;
+  color: var(--ink-faint);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.lan-hint {
+  margin: 12px 0 0;
+  color: var(--ink-faint);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+.lan-hint.warn {
+  color: #a06a13;
+}
+
+.lan-peer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.lan-peer {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 11px;
+  border: 1px solid rgba(19, 35, 60, 0.07);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+}
+
+.lan-peer:hover {
+  background: #fff;
+}
+
+.lan-peer.selected {
+  border-color: rgba(37, 99, 235, 0.32);
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.10);
+}
+
+.lan-peer-avatar {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  place-items: center;
+  border-radius: 9px;
+  color: #1d4da8;
+  background: var(--internal-soft);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.lan-peer.offline .lan-peer-avatar {
+  color: #8b98ab;
+  background: #f0f3f8;
+}
+
+.lan-peer-main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lan-peer-main strong {
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lan-peer-main span {
+  overflow: hidden;
+  color: var(--ink-faint);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lan-peer-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.lan-peer-status::before {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #1cb47c;
+  content: "";
+}
+
+.lan-peer-status.offline::before {
+  background: #b7c0cd;
+}
+
+.lan-peer-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+
+.lan-peer-actions button {
+  padding: 5px 9px;
+  border: 1px solid rgba(19, 35, 60, 0.09);
+  border-radius: 7px;
+  color: var(--ink-soft);
+  background: #fff;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.lan-peer-actions button:hover {
+  color: var(--ink);
+  border-color: rgba(37, 99, 235, 0.3);
+  background: var(--internal-soft);
+}
+
+.lan-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 11px;
+}
+
+.lan-add input,
+.lan-composer input {
+  min-width: 0;
+  flex: 1;
+  height: 34px;
+  padding: 0 11px;
+  border: 1px solid rgba(19, 35, 60, 0.11);
+  border-radius: 9px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.9);
+  font-size: 11.5px;
+  outline: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.lan-add input:focus,
+.lan-composer input:focus {
+  border-color: rgba(47, 123, 255, 0.45);
+  box-shadow: 0 0 0 3px rgba(47, 123, 255, 0.10);
+}
+
+.lan-add-btn {
+  flex: none;
+  height: 34px;
+  padding: 0 15px;
+  border: 0;
+  border-radius: 9px;
+  color: #fff;
+  background: var(--navy);
+  font-size: 11.5px;
+  font-weight: 620;
+  cursor: pointer;
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.lan-add-btn:hover {
+  opacity: 0.9;
+}
+
+.lan-add-btn:disabled,
+.lan-send-btn:disabled,
+.lan-pick-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.lan-messages {
+  display: flex;
+  max-height: 240px;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.lan-message {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 78%;
+  padding: 8px 11px;
+  border-radius: 12px;
+  background: #f1f4f9;
+}
+
+.lan-message.out {
+  align-self: flex-end;
+  color: #fff;
+  background: #2c62d6;
+}
+
+.lan-message-head {
+  color: var(--ink-faint);
+  font-size: 9px;
+  letter-spacing: 0.02em;
+}
+
+.lan-message.out .lan-message-head {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.lan-message-body {
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.lan-composer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.lan-to {
+  flex: none;
+  max-width: 130px;
+  overflow: hidden;
+  color: var(--ink-faint);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lan-send-btn {
+  flex: none;
+  height: 34px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 9px;
+  color: #fff;
+  background: var(--internal);
+  font-size: 11.5px;
+  font-weight: 620;
+  cursor: pointer;
+  transition: opacity 150ms ease;
+}
+
+.lan-send-btn:hover {
+  opacity: 0.9;
+}
+
+.lan-files {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lan-file {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 11px;
+  border: 1px solid rgba(19, 35, 60, 0.07);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.lan-file-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  place-items: center;
+  border-radius: 8px;
+  color: #2c62d6;
+  background: var(--internal-soft);
+  font-size: 13px;
+}
+
+.lan-file.incoming .lan-file-icon {
+  color: #17754f;
+  background: #e9f8f1;
+}
+
+.lan-file-main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lan-file-name {
+  overflow: hidden;
+  font-size: 11.5px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lan-file-meta {
+  color: var(--ink-faint);
+  font-size: 9.5px;
+}
+
+.lan-file-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+
+.lan-file-actions button {
+  padding: 5px 10px;
+  border: 1px solid rgba(19, 35, 60, 0.09);
+  border-radius: 7px;
+  color: var(--ink-soft);
+  background: #fff;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lan-file-actions button.accept {
+  color: #fff;
+  border-color: transparent;
+  background: #189a6a;
+}
+
+.lan-progress {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(19, 35, 60, 0.08);
+}
+
+.lan-progress span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--internal);
+  transition: width 200ms linear;
+}
+
+.lan-send-file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.lan-pick-btn {
+  height: 34px;
+  padding: 0 16px;
+  border: 1px solid rgba(19, 35, 60, 0.10);
+  border-radius: 9px;
+  color: var(--ink);
+  background: #fff;
+  font-size: 11.5px;
+  font-weight: 620;
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.lan-pick-btn:hover {
+  border-color: rgba(37, 99, 235, 0.3);
+  background: var(--internal-soft);
+}
+
+.lan-empty {
+  padding: 14px 12px;
+  border: 1px dashed rgba(19, 35, 60, 0.12);
+  border-radius: 12px;
+  color: var(--ink-faint);
+  font-size: 10.5px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+@media (max-width: 700px) {
+  .lan-self {
+    flex-direction: column;
+  }
+
+  .lan-peer {
+    flex-wrap: wrap;
+  }
+
+  .lan-peer-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}

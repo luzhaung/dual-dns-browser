@@ -1,0 +1,1194 @@
+package lan
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+)
+
+const (
+	appTag            = "dualdns-lan"
+	protoVersion      = 1
+	defaultHTTPPort   = 18190
+	defaultUDPPort    = 18191
+	beaconInterval    = 3 * time.Second
+	peerOnlineWindow  = 12 * time.Second
+	peerKeepWindow    = 10 * time.Minute
+	maxMessages       = 300
+	maxMessageRunes   = 2000
+	maxNameRunes      = 32
+	maxPeers          = 200
+	transferFolder    = "DualDNS Transfers"
+	discoveryDisabled = "未启用"
+)
+
+type peer struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	IP         string `json:"ip"`
+	Port       int    `json:"port"`
+	Token      string `json:"token"`
+	Version    string `json:"version"`
+	LastSeen   int64  `json:"lastSeen"`
+	Manual     bool   `json:"manual"`
+	Online     bool   `json:"online"`
+	Platform   string `json:"platform"`
+	ReportedIP string `json:"reportedIp"`
+}
+
+type message struct {
+	ID        string `json:"id"`
+	Direction string `json:"direction"`
+	PeerID    string `json:"peerId"`
+	PeerName  string `json:"peerName"`
+	Text      string `json:"text"`
+	At        int64  `json:"at"`
+}
+
+type outgoing struct {
+	ID       string `json:"id"`
+	PeerID   string `json:"peerId"`
+	PeerName string `json:"peerName"`
+	FileName string `json:"fileName"`
+	Size     int64  `json:"size"`
+	Done     int64  `json:"done"`
+	Status   string `json:"status"`
+	Error    string `json:"error"`
+	At       int64  `json:"at"`
+}
+
+type incoming struct {
+	ID       string `json:"id"`
+	FromID   string `json:"fromId"`
+	FromName string `json:"fromName"`
+	FromIP   string `json:"fromIp"`
+	FileName string `json:"fileName"`
+	Size     int64  `json:"size"`
+	Status   string `json:"status"`
+	SavedTo  string `json:"savedTo"`
+	At       int64  `json:"at"`
+	TempPath string `json:"-"`
+	Token    string `json:"-"`
+}
+
+type beacon struct {
+	App      string `json:"app"`
+	Version  int    `json:"v"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	IP       string `json:"ip"`
+	Port     int    `json:"port"`
+	Token    string `json:"token"`
+	Release  string `json:"release"`
+	Platform string `json:"platform"`
+}
+
+type health struct {
+	OK       bool   `json:"ok"`
+	App      string `json:"app"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	IP       string `json:"ip"`
+	Port     int    `json:"port"`
+	Token    string `json:"token"`
+	Version  string `json:"version"`
+	Platform string `json:"platform"`
+}
+
+type selfInfo struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	IP           string   `json:"ip"`
+	IPs          []string `json:"ips"`
+	Port         int      `json:"port"`
+	Version      string   `json:"version"`
+	Platform     string   `json:"platform"`
+	Discovery    bool     `json:"discovery"`
+	DiscoveryMsg string   `json:"discoveryMessage"`
+	Downloads    string   `json:"downloadsDir"`
+}
+
+type deviceFile struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Token string `json:"token"`
+}
+
+type Service struct {
+	dataDir       string
+	httpPort      int
+	discoveryPort int
+	appVersion    string
+
+	mu           sync.RWMutex
+	id           string
+	token        string
+	name         string
+	peers        map[string]*peer
+	messages     []message
+	outgoing     map[string]*outgoing
+	incoming     map[string]*incoming
+	selfIP       string
+	allIPs       []string
+	discovery    bool
+	discoveryMsg string
+
+	client   *http.Client
+	server   *http.Server
+	udp      *net.UDPConn
+	stopCh   chan struct{}
+	stopOnce sync.Once
+}
+
+func Run(args []string) {
+	fs := flag.NewFlagSet("lan", flag.ExitOnError)
+	dataDir := fs.String("data-dir", "", "应用数据目录")
+	httpPort := fs.Int("http-port", defaultHTTPPort, "局域网服务 HTTP 端口")
+	discoveryPort := fs.Int("discovery-port", defaultUDPPort, "局域网设备发现 UDP 端口")
+	version := fs.String("version", "dev", "应用版本")
+	_ = fs.Parse(args)
+
+	dir := strings.TrimSpace(*dataDir)
+	if dir == "" {
+		base, err := os.UserConfigDir()
+		if err != nil {
+			log.Fatalf("无法获取配置目录: %v", err)
+		}
+		dir = filepath.Join(base, "DualDNS Browser", "lan")
+	}
+
+	svc, err := newService(dir, *httpPort, *discoveryPort, *version)
+	if err != nil {
+		log.Fatalf("初始化局域网服务失败: %v", err)
+	}
+	if err := svc.start(); err != nil {
+		log.Fatalf("启动局域网服务失败: %v", err)
+	}
+
+	log.Printf("局域网快传已启动: %s:%d (设备 %s, %s)", svc.selfIP, svc.httpPort, svc.name, svc.id)
+
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	select {
+	case <-signals:
+	case <-svc.stopCh:
+	}
+	svc.stop()
+}
+
+func newService(dataDir string, httpPort, discoveryPort int, version string) (*Service, error) {
+	if httpPort < 1024 || httpPort > 65535 {
+		return nil, fmt.Errorf("HTTP 端口无效: %d", httpPort)
+	}
+	if discoveryPort < 1024 || discoveryPort > 65535 {
+		return nil, fmt.Errorf("发现端口无效: %d", discoveryPort)
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "inbox"), 0o755); err != nil {
+		return nil, err
+	}
+
+	svc := &Service{
+		dataDir:       dataDir,
+		httpPort:      httpPort,
+		discoveryPort: discoveryPort,
+		appVersion:    version,
+		peers:         make(map[string]*peer),
+		outgoing:      make(map[string]*outgoing),
+		incoming:      make(map[string]*incoming),
+		stopCh:        make(chan struct{}),
+		discoveryMsg:  discoveryDisabled,
+	}
+	svc.client = &http.Client{
+		Transport: &http.Transport{
+			Proxy:                 nil,
+			ForceAttemptHTTP2:     false,
+			DisableCompression:    true,
+			MaxIdleConns:          32,
+			IdleConnTimeout:       90 * time.Second,
+			ResponseHeaderTimeout: 10 * time.Second,
+			DialContext: (&net.Dialer{
+				Timeout:   4 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+		},
+	}
+
+	if err := svc.loadIdentity(); err != nil {
+		return nil, err
+	}
+	svc.allIPs, svc.selfIP = localIPv4s()
+	svc.loadMessages()
+	svc.loadIncoming()
+	return svc, nil
+}
+
+func (s *Service) loadIdentity() error {
+	path := filepath.Join(s.dataDir, "device.json")
+	var device deviceFile
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &device)
+	}
+	changed := false
+	if !validID(device.ID) {
+		device.ID = randomHex(8)
+		changed = true
+	}
+	if len([]rune(device.Name)) == 0 {
+		device.Name, _ = os.Hostname()
+		device.Name = cleanName(device.Name)
+		changed = true
+	}
+	if len(device.Token) != 32 {
+		device.Token = randomHex(16)
+		changed = true
+	}
+	s.id = device.ID
+	s.name = device.Name
+	s.token = device.Token
+	if changed {
+		return writeJSONFile(path, device)
+	}
+	return nil
+}
+
+func (s *Service) start() error {
+	listener, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", s.httpPort))
+	if err != nil {
+		return fmt.Errorf("端口 %d 被占用: %w", s.httpPort, err)
+	}
+	s.server = &http.Server{
+		Handler:           s.routes(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	go func() {
+		if err := s.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("HTTP 服务结束: %v", err)
+		}
+	}()
+
+	s.startDiscovery()
+	go s.beaconLoop()
+	return nil
+}
+
+func (s *Service) stop() {
+	s.stopOnce.Do(func() {
+		close(s.stopCh)
+		if s.udp != nil {
+			_ = s.udp.Close()
+		}
+		if s.server != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = s.server.Shutdown(ctx)
+			cancel()
+		}
+		log.Printf("局域网快传已停止")
+	})
+}
+
+func (s *Service) routes() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/__ddb/lan/health", s.handleHealth)
+	mux.HandleFunc("/__ddb/lan/snapshot", s.handleSnapshot)
+	mux.HandleFunc("/__ddb/lan/name", s.handleName)
+	mux.HandleFunc("/__ddb/lan/add-peer", s.handleAddPeer)
+	mux.HandleFunc("/__ddb/lan/message", s.handleSendMessage)
+	mux.HandleFunc("/__ddb/lan/send", s.handleSendFile)
+	mux.HandleFunc("/__ddb/lan/accept", s.handleAccept)
+	mux.HandleFunc("/__ddb/lan/discard", s.handleDiscard)
+	mux.HandleFunc("/__ddb/lan/clear", s.handleClearMessages)
+	mux.HandleFunc("/__ddb/lan/shutdown", s.handleShutdown)
+	mux.HandleFunc("/__ddb/lan/incoming-message", s.handleIncomingMessage)
+	mux.HandleFunc("/__ddb/lan/incoming-file", s.handleIncomingFile)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Browsers attach Origin to cross-site requests. Refusing those keeps
+		// random websites from driving the local/LAN API.
+		if r.Header.Get("Origin") != "" {
+			writeError(w, http.StatusForbidden, "不允许来自浏览器的跨站请求")
+			return
+		}
+		// Device discovery, messages and files are intentionally reachable from
+		// the LAN. The local control API is not: otherwise any machine on the
+		// same network could read device tokens, messages and pending files.
+		if controlPath(r.URL.Path) && !isLoopbackRemote(r.RemoteAddr) {
+			writeError(w, http.StatusForbidden, "局域网控制接口只允许本机访问")
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
+}
+
+func controlPath(path string) bool {
+	switch path {
+	case "/__ddb/lan/snapshot",
+		"/__ddb/lan/name",
+		"/__ddb/lan/add-peer",
+		"/__ddb/lan/message",
+		"/__ddb/lan/send",
+		"/__ddb/lan/accept",
+		"/__ddb/lan/discard",
+		"/__ddb/lan/clear",
+		"/__ddb/lan/shutdown":
+		return true
+	default:
+		return false
+	}
+}
+
+func isLoopbackRemote(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
+}
+
+func (s *Service) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "只支持 GET")
+		return
+	}
+	s.mu.RLock()
+	body := health{
+		OK:       true,
+		App:      appTag,
+		ID:       s.id,
+		Name:     s.name,
+		IP:       s.selfIP,
+		Port:     s.httpPort,
+		Token:    s.token,
+		Version:  s.appVersion,
+		Platform: runtime.GOOS,
+	}
+	s.mu.RUnlock()
+	writeJSON(w, http.StatusOK, body)
+}
+
+func (s *Service) handleSnapshot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "只支持 GET")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.snapshot())
+}
+
+func (s *Service) snapshot() map[string]any {
+	now := time.Now().UnixMilli()
+	s.mu.RLock()
+	self := selfInfo{
+		ID:           s.id,
+		Name:         s.name,
+		IP:           s.selfIP,
+		IPs:          append([]string(nil), s.allIPs...),
+		Port:         s.httpPort,
+		Version:      s.appVersion,
+		Platform:     runtime.GOOS,
+		Discovery:    s.discovery,
+		DiscoveryMsg: s.discoveryMsg,
+		Downloads:    downloadsDir(),
+	}
+	peers := make([]peer, 0, len(s.peers))
+	for _, item := range s.peers {
+		copyItem := *item
+		copyItem.Online = now-copyItem.LastSeen < peerOnlineWindow.Milliseconds()
+		copyItem.Token = ""
+		peers = append(peers, copyItem)
+	}
+	messagesOut := append([]message(nil), s.messages...)
+	outgoingOut := make([]outgoing, 0, len(s.outgoing))
+	for _, item := range s.outgoing {
+		outgoingOut = append(outgoingOut, *item)
+	}
+	incomingOut := make([]incoming, 0, len(s.incoming))
+	for _, item := range s.incoming {
+		if item.Status != "pending" {
+			continue
+		}
+		copyItem := *item
+		copyItem.TempPath = ""
+		copyItem.Token = ""
+		incomingOut = append(incomingOut, copyItem)
+	}
+	s.mu.RUnlock()
+
+	sort.Slice(peers, func(i, j int) bool {
+		if peers[i].Online != peers[j].Online {
+			return peers[i].Online
+		}
+		return strings.ToLower(peers[i].Name) < strings.ToLower(peers[j].Name)
+	})
+	sort.Slice(outgoingOut, func(i, j int) bool { return outgoingOut[i].At > outgoingOut[j].At })
+	sort.Slice(incomingOut, func(i, j int) bool { return incomingOut[i].At > incomingOut[j].At })
+
+	return map[string]any{
+		"ok":       true,
+		"self":     self,
+		"peers":    peers,
+		"messages": messagesOut,
+		"outgoing": outgoingOut,
+		"incoming": incomingOut,
+	}
+}
+
+func (s *Service) handleName(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "只支持 POST")
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	name := cleanName(body.Name)
+	if len([]rune(name)) == 0 {
+		writeError(w, http.StatusBadRequest, "电脑名称不能为空")
+		return
+	}
+	s.mu.Lock()
+	s.name = name
+	device := deviceFile{ID: s.id, Name: s.name, Token: s.token}
+	s.mu.Unlock()
+	if err := writeJSONFile(filepath.Join(s.dataDir, "device.json"), device); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "snapshot": s.snapshot()})
+}
+
+func (s *Service) handleAddPeer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "只支持 POST")
+		return
+	}
+	var body struct {
+		IP   string `json:"ip"`
+		Port int    `json:"port"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	host, port, err := parsePeerAddress(body.IP, body.Port)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	item, err := s.probePeer(host, port)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	s.mu.Lock()
+	item.Manual = true
+	item.LastSeen = time.Now().UnixMilli()
+	item.Online = true
+	s.peers[item.ID] = item
+	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "peer": item})
+}
+
+func (s *Service) handleSendMessage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "只支持 POST")
+		return
+	}
+	var body struct {
+		PeerID string `json:"peerId"`
+		Text   string `json:"text"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	text := strings.TrimSpace(body.Text)
+	if text == "" {
+		writeError(w, http.StatusBadRequest, "消息不能为空")
+		return
+	}
+	if len([]rune(text)) > maxMessageRunes {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("消息不能超过 %d 个字符", maxMessageRunes))
+		return
+	}
+	item, err := s.sendMessage(body.PeerID, text)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": item})
+}
+
+func (s *Service) sendMessage(peerID, text string) (message, error) {
+	target, err := s.findPeer(peerID)
+	if err != nil {
+		return message{}, err
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"fromId":   s.id,
+		"fromName": s.name,
+		"text":     text,
+	})
+	err = s.postToPeer(target, "/__ddb/lan/incoming-message", payload, 10*time.Second)
+	if err != nil {
+		return message{}, err
+	}
+	item := message{
+		ID:        randomHex(8),
+		Direction: "out",
+		PeerID:    target.ID,
+		PeerName:  target.Name,
+		Text:      text,
+		At:        time.Now().UnixMilli(),
+	}
+	s.appendMessage(item)
+	return item, nil
+}
+
+func (s *Service) handleIncomingMessage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "只支持 POST")
+		return
+	}
+	if !s.authorized(r) {
+		writeError(w, http.StatusForbidden, "设备令牌无效")
+		return
+	}
+	var body struct {
+		FromID   string `json:"fromId"`
+		FromName string `json:"fromName"`
+		Text     string `json:"text"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	text := strings.TrimSpace(body.Text)
+	if text == "" || !validID(body.FromID) {
+		writeError(w, http.StatusBadRequest, "消息格式不正确")
+		return
+	}
+	if len([]rune(text)) > maxMessageRunes {
+		writeError(w, http.StatusBadRequest, "消息过长")
+		return
+	}
+	name := cleanName(body.FromName)
+	if name == "" {
+		name = "同事"
+	}
+	at := time.Now().UnixMilli()
+	s.mu.Lock()
+	if existing, ok := s.peers[body.FromID]; ok {
+		existing.Name = name
+		existing.LastSeen = at
+	}
+	s.mu.Unlock()
+	item := message{
+		ID:        randomHex(8),
+		Direction: "in",
+		PeerID:    body.FromID,
+		PeerName:  name,
+		Text:      text,
+		At:        at,
+	}
+	s.appendMessage(item)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Service) handleClearMessages(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "只支持 POST")
+		return
+	}
+	s.mu.Lock()
+	s.messages = nil
+	s.persistMessagesLocked()
+	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Service) handleShutdown(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "只支持 POST")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	go func() {
+		time.Sleep(120 * time.Millisecond)
+		s.stop()
+	}()
+}
+
+func (s *Service) appendMessage(item message) {
+	s.mu.Lock()
+	s.messages = append(s.messages, item)
+	if len(s.messages) > maxMessages {
+		s.messages = s.messages[len(s.messages)-maxMessages:]
+	}
+	s.persistMessagesLocked()
+	s.mu.Unlock()
+}
+
+func (s *Service) loadMessages() {
+	data, err := os.ReadFile(filepath.Join(s.dataDir, "messages.json"))
+	if err != nil {
+		return
+	}
+	var items []message
+	if json.Unmarshal(data, &items) != nil {
+		return
+	}
+	if len(items) > maxMessages {
+		items = items[len(items)-maxMessages:]
+	}
+	s.messages = items
+}
+
+func (s *Service) persistMessagesLocked() {
+	// Keep the last write cheap: the file is small and capped at maxMessages.
+	data, err := json.MarshalIndent(s.messages, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = writeFileAtomic(filepath.Join(s.dataDir, "messages.json"), append(data, '\n'))
+}
+
+func (s *Service) findPeer(peerID string) (peer, error) {
+	peerID = strings.TrimSpace(peerID)
+	if peerID == "" {
+		return peer{}, errors.New("请先选择一个同事的设备")
+	}
+	s.mu.RLock()
+	item, ok := s.peers[peerID]
+	if ok {
+		copyItem := *item
+		s.mu.RUnlock()
+		if copyItem.IP == "" || copyItem.Port <= 0 {
+			return peer{}, fmt.Errorf("设备 %s 缺少地址信息", copyItem.Name)
+		}
+		return copyItem, nil
+	}
+	s.mu.RUnlock()
+	return peer{}, errors.New("设备不在线，请刷新列表后重试")
+}
+
+func (s *Service) probePeer(host string, port int) (*peer, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	url := fmt.Sprintf("http://%s:%d/__ddb/lan/health", host, port)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("连不上 %s:%d，请确认对方已打开本应用，或局域网防火墙允许访问", host, port)
+	}
+	defer resp.Body.Close()
+	var body health
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&body); err != nil {
+		return nil, fmt.Errorf("%s:%d 不是 DualDNS 局域网服务", host, port)
+	}
+	if !body.OK || body.App != appTag || !validID(body.ID) {
+		return nil, fmt.Errorf("%s:%d 不是 DualDNS 局域网服务", host, port)
+	}
+	if body.ID == s.id {
+		return nil, errors.New("这是本机自己的地址")
+	}
+	return &peer{
+		ID:         body.ID,
+		Name:       cleanName(body.Name),
+		IP:         host,
+		Port:       body.Port,
+		Token:      body.Token,
+		Version:    body.Version,
+		Platform:   body.Platform,
+		ReportedIP: body.IP,
+		Manual:     true,
+	}, nil
+}
+
+func (s *Service) authorized(r *http.Request) bool {
+	s.mu.RLock()
+	token := s.token
+	s.mu.RUnlock()
+	return r.Header.Get("X-DDB-Token") == token && r.Header.Get("X-DDB-App") == appTag
+}
+
+func (s *Service) postToPeer(target peer, path string, payload []byte, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	url := fmt.Sprintf("http://%s:%d%s", target.IP, target.Port, path)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(payload)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-DDB-App", appTag)
+	req.Header.Set("X-DDB-Token", target.Token)
+	resp, err := s.client.Do(req)
+	if err != nil {
+		s.markPeerOffline(target.ID)
+		return fmt.Errorf("发送失败，可能不在同一局域网或被防火墙拦截: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		reason := readErrorBody(resp)
+		s.markPeerOffline(target.ID)
+		return fmt.Errorf("对方拒绝: %s", reason)
+	}
+	return nil
+}
+
+func (s *Service) markPeerOffline(peerID string) {
+	s.mu.Lock()
+	if item, ok := s.peers[peerID]; ok {
+		item.LastSeen = 0
+		item.Online = false
+	}
+	s.mu.Unlock()
+}
+
+func (s *Service) startDiscovery() {
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: s.discoveryPort})
+	if err != nil {
+		s.mu.Lock()
+		s.discovery = false
+		s.discoveryMsg = fmt.Sprintf("自动发现不可用（UDP %d 被占用），可用手动输入 IP", s.discoveryPort)
+		s.mu.Unlock()
+		log.Printf("设备发现未启用: %v", err)
+		return
+	}
+	s.udp = conn
+	s.mu.Lock()
+	s.discovery = true
+	s.discoveryMsg = "在线"
+	s.mu.Unlock()
+
+	go func() {
+		buffer := make([]byte, 16*1024)
+		for {
+			n, addr, err := conn.ReadFromUDP(buffer)
+			if err != nil {
+				return
+			}
+			var item beacon
+			if json.Unmarshal(buffer[:n], &item) != nil {
+				continue
+			}
+			s.absorbBeacon(item, addr.IP)
+		}
+	}()
+}
+
+func (s *Service) absorbBeacon(item beacon, source net.IP) {
+	if item.App != appTag || item.Version != protoVersion || !validID(item.ID) || item.ID == s.id {
+		return
+	}
+	if item.Port < 1024 || item.Port > 65535 {
+		return
+	}
+	ip := item.IP
+	if source != nil && source.To4() != nil && !source.IsLoopback() {
+		ip = source.String()
+	}
+	if net.ParseIP(ip) == nil {
+		return
+	}
+	now := time.Now().UnixMilli()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.peers[item.ID]; !exists && len(s.peers) >= maxPeers {
+		return
+	}
+	existing := s.peers[item.ID]
+	if existing == nil {
+		existing = &peer{ID: item.ID, Manual: false}
+		s.peers[item.ID] = existing
+	}
+	existing.Name = cleanName(item.Name)
+	if existing.Name == "" {
+		existing.Name = "同事"
+	}
+	existing.IP = ip
+	existing.ReportedIP = item.IP
+	existing.Port = item.Port
+	existing.Token = item.Token
+	existing.Version = item.Release
+	existing.Platform = item.Platform
+	existing.LastSeen = now
+	existing.Online = true
+}
+
+func (s *Service) beaconLoop() {
+	timer := time.NewTimer(200 * time.Millisecond)
+	defer timer.Stop()
+	for {
+		select {
+		case <-s.stopCh:
+			return
+		case <-timer.C:
+			s.broadcast()
+			s.prunePeers()
+			timer.Reset(beaconInterval)
+		}
+	}
+}
+
+func (s *Service) broadcast() {
+	s.mu.RLock()
+	item := beacon{
+		App:      appTag,
+		Version:  protoVersion,
+		ID:       s.id,
+		Name:     s.name,
+		IP:       s.selfIP,
+		Port:     s.httpPort,
+		Token:    s.token,
+		Release:  s.appVersion,
+		Platform: runtime.GOOS,
+	}
+	s.mu.RUnlock()
+	if item.IP == "" {
+		return
+	}
+	data, err := json.Marshal(item)
+	if err != nil {
+		return
+	}
+	for _, target := range broadcastTargets() {
+		conn, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: target, Port: s.discoveryPort})
+		if err != nil {
+			continue
+		}
+		_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+		_, _ = conn.Write(data)
+		_ = conn.Close()
+	}
+}
+
+func (s *Service) prunePeers() {
+	cutoff := time.Now().Add(-peerKeepWindow).UnixMilli()
+	transferCutoff := time.Now().Add(-10 * time.Minute).UnixMilli()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, item := range s.peers {
+		if item.Manual {
+			item.Online = false
+			continue
+		}
+		if item.LastSeen < cutoff {
+			delete(s.peers, id)
+		}
+	}
+	for id, item := range s.outgoing {
+		if item.Status != "sending" && item.At < transferCutoff {
+			delete(s.outgoing, id)
+		}
+	}
+}
+
+func (s *Service) loadIncoming() {
+	data, err := os.ReadFile(filepath.Join(s.dataDir, "incoming.json"))
+	if err != nil {
+		return
+	}
+	var items []incoming
+	if json.Unmarshal(data, &items) != nil {
+		return
+	}
+	kept := items[:0]
+	for _, item := range items {
+		if item.Status != "pending" {
+			continue
+		}
+		if info, err := os.Stat(item.TempPath); err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	for index := range kept {
+		s.incoming[kept[index].ID] = &kept[index]
+	}
+}
+
+func (s *Service) persistIncomingLocked() {
+	items := make([]incoming, 0, len(s.incoming))
+	for _, item := range s.incoming {
+		if item.Status == "pending" {
+			items = append(items, *item)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].At < items[j].At })
+	data, err := json.MarshalIndent(items, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = writeFileAtomic(filepath.Join(s.dataDir, "incoming.json"), append(data, '\n'))
+}
+
+func broadcastTargets() []net.IP {
+	targets := []net.IP{net.IPv4bcast}
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return targets
+	}
+	seen := map[string]bool{"255.255.255.255": true}
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ipnet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip4 := ipnet.IP.To4()
+			if ip4 == nil {
+				continue
+			}
+			mask := ipnet.Mask
+			if len(mask) != 4 {
+				continue
+			}
+			broadcast := make(net.IP, 4)
+			for i := 0; i < 4; i++ {
+				broadcast[i] = ip4[i] | ^mask[i]
+			}
+			key := broadcast.String()
+			if !seen[key] {
+				seen[key] = true
+				targets = append(targets, broadcast)
+			}
+		}
+	}
+	return targets
+}
+
+func localIPv4s() ([]string, string) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil, ""
+	}
+	var all []string
+	best := ""
+	bestScore := -1
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		name := strings.ToLower(iface.Name)
+		if isVirtualInterface(name) {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ipnet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip4 := ipnet.IP.To4()
+			if ip4 == nil || ip4.IsLoopback() || ip4.IsLinkLocalUnicast() {
+				continue
+			}
+			text := ip4.String()
+			all = append(all, text)
+			score := 0
+			switch {
+			case strings.HasPrefix(name, "en0"), strings.HasPrefix(name, "en1"):
+				score = 5
+			case strings.Contains(name, "wi-fi"), strings.Contains(name, "wifi"),
+				strings.Contains(name, "ethernet"), strings.Contains(name, "以太网"),
+				strings.HasPrefix(name, "eth"):
+				score = 4
+			case isPrivateIPv4(ip4):
+				score = 3
+			}
+			if score > bestScore {
+				best = text
+				bestScore = score
+			}
+		}
+	}
+	sort.Strings(all)
+	return all, best
+}
+
+func isVirtualInterface(name string) bool {
+	prefixes := []string{
+		"utun", "tun", "tap", "bridge", "vmnet", "vboxnet", "docker", "veth",
+		"awdl", "llw", "gif", "stf", "p2p", "clash", "mihomo", "tailscale",
+		"wg", "zt",
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func isPrivateIPv4(ip net.IP) bool {
+	ip4 := ip.To4()
+	return ip4 != nil && (ip4[0] == 10 ||
+		(ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31) ||
+		(ip4[0] == 192 && ip4[1] == 168))
+}
+
+func downloadsDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, "Downloads", transferFolder)
+}
+
+func parsePeerAddress(value string, fallbackPort int) (string, int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", 0, errors.New("请输入同事的 IP，例如 192.168.2.35")
+	}
+	host := value
+	port := fallbackPort
+	if strings.Contains(value, ":") {
+		splitHost, splitPort, err := net.SplitHostPort(value)
+		if err != nil {
+			return "", 0, errors.New("地址格式不正确，应为 192.168.2.35 或 192.168.2.35:18190")
+		}
+		host = splitHost
+		parsed, err := strconv.Atoi(splitPort)
+		if err != nil {
+			return "", 0, errors.New("端口格式不正确")
+		}
+		port = parsed
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || ip.To4() == nil {
+		return "", 0, errors.New("请输入有效的 IPv4 地址")
+	}
+	if port <= 0 {
+		port = defaultHTTPPort
+	}
+	if port < 1024 || port > 65535 {
+		return "", 0, errors.New("端口超出范围")
+	}
+	return ip.To4().String(), port, nil
+}
+
+func cleanName(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.Map(func(r rune) rune {
+		if r < 32 || r == 127 {
+			return -1
+		}
+		return r
+	}, value)
+	runes := []rune(value)
+	if len(runes) > maxNameRunes {
+		runes = runes[:maxNameRunes]
+	}
+	return strings.TrimSpace(string(runes))
+}
+
+func validID(value string) bool {
+	if len(value) < 8 || len(value) > 64 {
+		return false
+	}
+	for _, char := range value {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') && (char < 'A' || char > 'F') && char != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func randomHex(bytes int) string {
+	buffer := make([]byte, bytes)
+	if _, err := rand.Read(buffer); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(buffer)
+}
+
+func decodeJSON(r *http.Request, target any) error {
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	if err := decoder.Decode(target); err != nil {
+		return fmt.Errorf("请求内容格式不正确")
+	}
+	return nil
+}
+
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		http.Error(w, "编码失败", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_, _ = w.Write(data)
+}
+
+func writeError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]any{"ok": false, "error": message})
+}
+
+func writeJSONFile(path string, value any) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(path, append(data, '\n'))
+}
+
+func writeFileAtomic(path string, data []byte) error {
+	temp := path + ".tmp"
+	if err := os.WriteFile(temp, data, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(temp, path); err != nil {
+		_ = os.Remove(temp)
+		return err
+	}
+	return nil
+}
+
+func readErrorBody(resp *http.Response) string {
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	var body struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(data, &body) == nil && body.Error != "" {
+		return body.Error
+	}
+	return fmt.Sprintf("HTTP %d", resp.StatusCode)
+}

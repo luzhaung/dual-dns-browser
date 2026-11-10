@@ -15,6 +15,7 @@
 - 一键打开内网、外网，或同时打开两个左右分屏的浏览器窗口。
 - Chrome / Edge 页面彩色边框和标题前缀，Firefox 顶部色条，方便人工区分环境。
 - 页面内提供 `dataset.dualdnsEnv` 等稳定标识，方便 Agent / 自动化识别当前环境。
+- 局域网快传：自动发现同一网络的同事，支持发消息、传文件、手动添加 IP 和接收确认。
 - 应用内检查更新，启动时自动静默检查；支持 Gitee 国内源和 GitHub 国外源。
 - 不修改系统 DNS、不修改 hosts、不需要管理员权限。
 - 外网代理绑定物理网卡并自行解析域名，忽略本机 hosts 和 Clash / VPN 的 DNS 规则；内网代理保持独立。
@@ -86,14 +87,22 @@ scripts/          构建与发版脚本
 updates/          Gitee / GitHub 更新清单
 ```
 
+## 局域网快传
+
+“局域网快传”页签可以在同一 Wi-Fi / 局域网内发现正在运行本应用的电脑，并发送短消息或文件。发现使用 UDP `18191`，消息和文件传输使用 TCP `18190`；双方需要在同一可互访网络，Windows 首次询问防火墙权限时请允许专用网络。
+
+收到的文件会先暂存，接收方点“保存”后才写入 `Downloads/DualDNS Transfers`。单个文件最大 2 GB。局域网传输使用本机 HTTP 协议，没有端到端加密，请只在可信网络使用。
+
+设备和消息仅在本机与局域网内的同事电脑之间传输，不上传 Gitee、GitHub 或任何云端服务。控制接口只监听并接受本机请求，局域网内只开放发现、消息投递和文件投递所需接口。
+
 ## 更新清单格式
 
 ```json
 {
-  "version": "1.1.4",
+  "version": "1.2.0",
   "published_at": "2026-11-05T12:00:00Z",
   "notes": "更新内容",
-  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.1.4",
+  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.2.0",
   "downloads": {
     "macos-aarch64": "https://example.com/apple.dmg",
     "macos-x86_64": "https://example.com/intel.dmg",

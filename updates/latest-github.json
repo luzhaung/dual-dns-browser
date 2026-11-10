@@ -1,21 +1,21 @@
 {
-  "version": "1.1.8",
-  "published_at": "2026-11-09T17:55:40.452Z",
-  "notes": "修复外网窗口受本机 hosts、Clash TUN 和内网 DNS 规则影响的问题。\n\n- 外网代理现在绑定物理网卡出口，自己向配置的公网 DNS 查询并直连目标 IP，不再读取系统 hosts，也不再经过 Clash/VPN 的 DNS 与分流规则。\n- 内网代理保持原样，仍然只使用内网 DNS，不会走物理网卡绑定或上游代理。\n- 修复开启 Clash TUN 后，部分域名被解析到内网或错误 IP，导致 `ERR_CONNECTION_CLOSED` 的问题。\n- 外网请求默认直连，不再自动交给本机 HTTP 代理；避免 Clash 的 `nameserver-policy`、`fake-ip-filter` 和 `use-system-hosts` 影响外网环境。\n- 使用说明和应用内常见问题补充“外网忽略本机 hosts / Clash”的说明。",
-  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.1.8",
+  "version": "1.2.0",
+  "published_at": "2026-11-10T17:56:44.568Z",
+  "notes": "新增“局域网快传”，同一网络内的同事可以直接发消息和传文件。\n\n- 自动发现同一 Wi-Fi / 局域网内正在运行本应用的电脑，显示电脑名称、IP、平台和在线状态。\n- 支持选择同事后发送消息、选择一个或多个文件；支持手动输入 IP，兼容关闭广播的网络。\n- 收到文件后先暂存，接收方确认保存后才写入下载目录，默认目录为 `Downloads/DualDNS Transfers`。\n- 支持中文文件名、发送进度、失败提示和接收确认，单个文件最大 2 GB。\n- 局域网消息与文件只在本机与同事电脑之间传输，不上传 Gitee、GitHub 或任何云端服务。\n- 本机控制接口仅允许本机访问，设备列表不会暴露令牌；局域网内只开放发现、消息和文件投递接口。\n- 自动发现使用 UDP `18191`，传输使用 TCP `18190`；Windows 首次询问防火墙权限时请允许专用网络。\n- 局域网传输不经过云端，但使用本机 HTTP 协议且没有端到端加密，请只在可信网络使用。\n- 不改动原有内外网浏览器、DNS 配置、应用内更新和托盘行为。",
+  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.2.0",
   "downloads": {
-    "macos-aarch64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.1.8/DualDNS-Browser-1.1.8-macOS-AppleSilicon.dmg",
-    "macos-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.1.8/DualDNS-Browser-1.1.8-macOS-Intel.dmg",
-    "windows-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.1.8/DualDNS-Browser-1.1.8-Windows-x64-Setup.exe"
+    "macos-aarch64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.2.0/DualDNS-Browser-1.2.0-macOS-AppleSilicon.dmg",
+    "macos-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.2.0/DualDNS-Browser-1.2.0-macOS-Intel.dmg",
+    "windows-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.2.0/DualDNS-Browser-1.2.0-Windows-x64-Setup.exe"
   },
   "checksums": {
-    "macos-aarch64": "1304695f79d498d96435fa31bd082574a3e39f3402cae3f3a5783abbe7edde0d",
-    "macos-x86_64": "5aefa607c0e24b97edc6270cdefdb2aec6f909c7e754df83a8488d399ba3e618",
-    "windows-x86_64": "73f8d7daa772b0e13ba2c9ecf2e194b63fc964bd49a8bfecb3c92aa3904534f3"
+    "macos-aarch64": "6f815ed425dfb9f0d5d9eddfd2bad16e6114c3c62e648722bc19bd9aa30bf4a6",
+    "macos-x86_64": "37a3b5a7a667cef6de0a4e8753e7ba34aef843dbf7b50f96e60381f822366cbd",
+    "windows-x86_64": "5dc89bfe9ed9d648515cde7fdb03ab9a1d7815d8a8514f6d0f4a1a906ac3082f"
   },
   "sizes": {
-    "macos-aarch64": 5429821,
-    "macos-x86_64": 5976458,
-    "windows-x86_64": 4105178
+    "macos-aarch64": 5752911,
+    "macos-x86_64": 6335915,
+    "windows-x86_64": 4381742
   }
 }

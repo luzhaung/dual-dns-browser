@@ -32,6 +32,8 @@ const INTERNAL_COLOR: &str = "#2F7BFF";
 const EXTERNAL_COLOR: &str = "#F05A4F";
 const INTERNAL_PORT: u16 = 18080;
 const EXTERNAL_PORT: u16 = 18082;
+const LAN_PORT: u16 = 18190;
+const LAN_DISCOVERY_PORT: u16 = 18191;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -60,6 +62,8 @@ struct AppState {
     settings: Mutex<Settings>,
     proxies: Mutex<HashMap<String, CommandChild>>,
     markers: Mutex<HashMap<String, std::thread::JoinHandle<()>>>,
+    lan: Mutex<Option<CommandChild>>,
+    lan_lock: Mutex<()>,
     sessions: Mutex<Vec<BrowserSession>>,
     tray: Mutex<Option<TrayIcon>>,
     internal_proxy_lock: Mutex<()>,
@@ -92,6 +96,14 @@ struct ProxyHealth {
     app: Option<String>,
     env: Option<String>,
     dns: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LanHealth {
+    ok: bool,
+    app: Option<String>,
+    id: Option<String>,
+    port: Option<u16>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -586,6 +598,197 @@ fn wait_for_port_close(port: u16) {
         }
         std::thread::sleep(Duration::from_millis(80));
     }
+}
+
+fn lan_request(
+    method: &str,
+    path: &str,
+    body: Option<serde_json::Value>,
+    timeout: Duration,
+) -> Result<serde_json::Value, String> {
+    let payload = match body {
+        Some(value) => serde_json::to_string(&value).map_err(|e| format!("请求编码失败: {e}"))?,
+        None => String::new(),
+    };
+    let connect_timeout = timeout.min(Duration::from_secs(3));
+    let addr = SocketAddr::from(([127, 0, 0, 1], LAN_PORT));
+    let mut stream = TcpStream::connect_timeout(&addr, connect_timeout)
+        .map_err(|_| "局域网服务尚未就绪，请稍后重试".to_string())?;
+    stream.set_read_timeout(Some(timeout)).ok();
+    stream.set_write_timeout(Some(timeout)).ok();
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        payload.as_bytes().len(),
+        payload
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| format!("发送局域网请求失败: {e}"))?;
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .map_err(|e| format!("读取局域网服务响应失败: {e}"))?;
+    if response.is_empty() {
+        return Err("局域网服务没有响应，请重试".to_string());
+    }
+    let text = String::from_utf8_lossy(&response);
+    let (head, body_text) = text
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| "局域网服务返回格式异常".to_string())?;
+    let status = head
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(0);
+    let parsed: serde_json::Value = serde_json::from_str(body_text)
+        .map_err(|_| "局域网服务返回数据格式异常".to_string())?;
+    if status != 200 {
+        let message = parsed
+            .get("error")
+            .and_then(|value| value.as_str())
+            .unwrap_or("局域网操作失败");
+        return Err(message.to_string());
+    }
+    Ok(parsed)
+}
+
+fn lan_health() -> Option<LanHealth> {
+    let response = lan_request(
+        "GET",
+        "/__ddb/lan/health",
+        None,
+        Duration::from_millis(900),
+    )
+    .ok()?;
+    serde_json::from_value(response).ok()
+}
+
+fn wait_for_lan(deadline: Duration) -> bool {
+    let stop_at = Instant::now() + deadline;
+    while Instant::now() < stop_at {
+        if let Some(health) = lan_health() {
+            if health.ok
+                && health.app.as_deref() == Some("dualdns-lan")
+                && health.id.is_some()
+                && health.port == Some(LAN_PORT)
+            {
+                return true;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(120));
+    }
+    false
+}
+
+fn stop_lan(state: &AppState) {
+    if let Ok(mut lan) = state.lan.lock() {
+        if let Some(child) = lan.take() {
+            let _ = child.kill();
+        }
+    }
+    let _ = lan_request(
+        "POST",
+        "/__ddb/lan/shutdown",
+        None,
+        Duration::from_millis(400),
+    );
+}
+
+fn ensure_lan(app: &AppHandle, state: &AppState) -> Result<(), String> {
+    let _guard = state
+        .lan_lock
+        .lock()
+        .map_err(|_| "内部状态错误".to_string())?;
+    let owned = state
+        .lan
+        .lock()
+        .map(|lan| lan.is_some())
+        .unwrap_or(false);
+
+    if let Some(health) = lan_health() {
+        if health.app.as_deref() == Some("dualdns-lan") {
+            if owned && health.port == Some(LAN_PORT) {
+                return Ok(());
+            }
+            // A leftover service from a previous run (or a crashed instance).
+            // Stop it so this app owns the identity, messages and inbox again.
+            let _ = lan_request(
+                "POST",
+                "/__ddb/lan/shutdown",
+                None,
+                Duration::from_millis(800),
+            );
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < deadline && lan_health().is_some() {
+                std::thread::sleep(Duration::from_millis(80));
+            }
+        } else {
+            return Err(format!(
+                "本地端口 {} 已被其他程序占用，局域网快传无法启动",
+                LAN_PORT
+            ));
+        }
+    }
+    stop_lan(state);
+
+    let data_dir = app_data_dir(app)?.join("lan");
+    fs::create_dir_all(&data_dir).map_err(|e| format!("无法创建局域网数据目录: {e}"))?;
+    let data_dir = data_dir.to_string_lossy().to_string();
+    let port = LAN_PORT.to_string();
+    let discovery = LAN_DISCOVERY_PORT.to_string();
+    let command = app
+        .shell()
+        .sidecar("dual-dns-proxy")
+        .map_err(|e| format!("找不到局域网服务组件: {e}"))?
+        .args([
+            "lan",
+            "--data-dir",
+            data_dir.as_str(),
+            "--http-port",
+            port.as_str(),
+            "--discovery-port",
+            discovery.as_str(),
+            "--version",
+            update::current_version(),
+        ]);
+    let (mut rx, child) = command
+        .spawn()
+        .map_err(|e| format!("启动局域网服务失败: {e}"))?;
+
+    let log_path = app_data_dir(app)?.join("lan.log");
+    tauri::async_runtime::spawn(async move {
+        let mut log_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_path)
+            .ok();
+        while let Some(event) = rx.recv().await {
+            let line = match event {
+                CommandEvent::Stdout(line) => format!("[out] {}\n", String::from_utf8_lossy(&line)),
+                CommandEvent::Stderr(line) => format!("[err] {}\n", String::from_utf8_lossy(&line)),
+                _ => continue,
+            };
+            if let Some(file) = log_file.as_mut() {
+                let _ = file.write_all(line.as_bytes());
+            }
+        }
+    });
+
+    if !wait_for_lan(Duration::from_secs(5)) {
+        let _ = child.kill();
+        return Err(format!(
+            "局域网快传启动失败。请检查端口 {}、{} 是否被占用，或查看 lan.log",
+            LAN_PORT, LAN_DISCOVERY_PORT
+        ));
+    }
+
+    state
+        .lan
+        .lock()
+        .map_err(|_| "内部状态错误".to_string())?
+        .replace(child);
+    Ok(())
 }
 
 fn stop_proxy_handle(state: &AppState, env: &str) {
@@ -1399,6 +1602,7 @@ fn cleanup_before_exit(app: &AppHandle) {
     }
 
     stop_all_proxies(app);
+    stop_lan(&state);
     let mode = state
         .exit_mode
         .lock()
@@ -1489,6 +1693,7 @@ async fn download_and_install(
             // The Windows installer replaces files in the install directory;
             // stop the sidecars before it starts so they do not lock anything.
             stop_all_proxies(&prepare_app);
+            stop_lan(&prepare_app.state::<AppState>());
             std::thread::sleep(Duration::from_millis(250));
         })
     })
@@ -1522,6 +1727,202 @@ async fn download_and_install(
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
     update::open_external_url(&url)
+}
+
+#[tauri::command]
+async fn lan_snapshot() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        lan_request(
+            "GET",
+            "/__ddb/lan/snapshot",
+            None,
+            Duration::from_secs(4),
+        )
+    })
+    .await
+    .map_err(|error| format!("读取局域网状态失败: {error}"))?
+}
+
+#[tauri::command]
+async fn lan_restart(app: AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        stop_lan(&state);
+        ensure_lan(&app, &state)?;
+        Ok("局域网快传已重新连接".to_string())
+    })
+    .await
+    .map_err(|error| format!("重启局域网服务失败: {error}"))?
+}
+
+#[tauri::command]
+async fn lan_set_name(name: String) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        lan_request(
+            "POST",
+            "/__ddb/lan/name",
+            Some(serde_json::json!({ "name": name })),
+            Duration::from_secs(4),
+        )
+    })
+    .await
+    .map_err(|error| format!("保存电脑名称失败: {error}"))?
+}
+
+#[tauri::command]
+async fn lan_add_peer(ip: String) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        lan_request(
+            "POST",
+            "/__ddb/lan/add-peer",
+            Some(serde_json::json!({ "ip": ip })),
+            Duration::from_secs(8),
+        )
+    })
+    .await
+    .map_err(|error| format!("添加设备失败: {error}"))?
+}
+
+#[tauri::command]
+async fn lan_send_message(peer_id: String, text: String) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        lan_request(
+            "POST",
+            "/__ddb/lan/message",
+            Some(serde_json::json!({ "peerId": peer_id, "text": text })),
+            Duration::from_secs(12),
+        )
+    })
+    .await
+    .map_err(|error| format!("发送消息失败: {error}"))?
+}
+
+#[tauri::command]
+async fn lan_send_files(
+    peer_id: String,
+    paths: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut sent = 0_u32;
+        let mut errors: Vec<String> = Vec::new();
+        for path in paths {
+            let label = Path::new(&path)
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.clone());
+            match lan_request(
+                "POST",
+                "/__ddb/lan/send",
+                Some(serde_json::json!({ "peerId": peer_id, "path": path })),
+                Duration::from_secs(10),
+            ) {
+                Ok(_) => sent += 1,
+                Err(error) => errors.push(format!("{label}：{error}")),
+            }
+        }
+        Ok(serde_json::json!({
+            "ok": errors.is_empty(),
+            "sent": sent,
+            "errors": errors,
+        }))
+    })
+    .await
+    .map_err(|error| format!("发送文件失败: {error}"))?
+}
+
+#[tauri::command]
+async fn lan_pick_files(app: AppHandle) -> Option<Vec<String>> {
+    let files = app
+        .dialog()
+        .file()
+        .set_title("选择要发送给同事的文件")
+        .blocking_pick_files()?;
+    let paths: Vec<String> = files
+        .into_iter()
+        .filter_map(|file| file.into_path().ok())
+        .map(|path| path.to_string_lossy().to_string())
+        .collect();
+    if paths.is_empty() {
+        None
+    } else {
+        Some(paths)
+    }
+}
+
+#[tauri::command]
+async fn lan_accept_transfer(id: String) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        lan_request(
+            "POST",
+            "/__ddb/lan/accept",
+            Some(serde_json::json!({ "id": id })),
+            Duration::from_secs(120),
+        )
+    })
+    .await
+    .map_err(|error| format!("保存文件失败: {error}"))?
+}
+
+#[tauri::command]
+async fn lan_discard_transfer(id: String) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        lan_request(
+            "POST",
+            "/__ddb/lan/discard",
+            Some(serde_json::json!({ "id": id })),
+            Duration::from_secs(6),
+        )
+    })
+    .await
+    .map_err(|error| format!("删除文件失败: {error}"))?
+}
+
+#[tauri::command]
+async fn lan_clear_messages() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        lan_request(
+            "POST",
+            "/__ddb/lan/clear",
+            None,
+            Duration::from_secs(6),
+        )
+    })
+    .await
+    .map_err(|error| format!("清空消息失败: {error}"))?
+}
+
+#[tauri::command]
+fn lan_open_downloads(app: AppHandle) -> Result<(), String> {
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|error| format!("无法定位用户目录: {error}"))?;
+    let dir = home.join("Downloads").join("DualDNS Transfers");
+    fs::create_dir_all(&dir).map_err(|error| format!("无法创建接收目录: {error}"))?;
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&dir)
+            .spawn()
+            .map_err(|error| format!("打开目录失败: {error}"))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        Command::new("explorer.exe")
+            .arg(&dir)
+            .creation_flags(0x08000000)
+            .spawn()
+            .map_err(|error| format!("打开目录失败: {error}"))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(&dir)
+            .spawn()
+            .map_err(|error| format!("打开目录失败: {error}"))?;
+    }
+    Ok(())
 }
 
 pub fn run() {
@@ -1566,6 +1967,14 @@ pub fn run() {
             }
             let tray = tray_builder.build(app)?;
             *state.tray.lock().unwrap() = Some(tray);
+
+            let lan_handle = handle.clone();
+            std::thread::spawn(move || {
+                let state = lan_handle.state::<AppState>();
+                if let Err(error) = ensure_lan(&lan_handle, &state) {
+                    eprintln!("局域网快传启动失败: {error}");
+                }
+            });
 
             let fallback = app.handle().clone();
             std::thread::spawn(move || {
@@ -1619,7 +2028,18 @@ pub fn run() {
             app_version,
             check_for_updates,
             download_and_install,
-            open_external_url
+            open_external_url,
+            lan_snapshot,
+            lan_restart,
+            lan_set_name,
+            lan_add_peer,
+            lan_send_message,
+            lan_send_files,
+            lan_pick_files,
+            lan_accept_transfer,
+            lan_discard_transfer,
+            lan_clear_messages,
+            lan_open_downloads
         ])
         .build(tauri::generate_context!())
         .expect("error while building DualDNS Browser");

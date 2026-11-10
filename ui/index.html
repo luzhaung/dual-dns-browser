@@ -24,7 +24,7 @@
           title="检查更新"
         >
           <span class="version-dot" id="versionDot"></span>
-          <span id="versionLabel">v1.1.5</span>
+          <span id="versionLabel">v1.2.0</span>
           <svg class="version-refresh" viewBox="0 0 16 16" aria-hidden="true">
             <path
               d="M13 8a5 5 0 1 1-1.46-3.54M13 3v3.2H9.8"
@@ -94,6 +94,33 @@
         </div>
       </header>
 
+      <nav class="view-switch" role="tablist" aria-label="功能切换">
+        <button
+          class="view-tab active"
+          id="tabBrowser"
+          type="button"
+          role="tab"
+          aria-selected="true"
+          aria-controls="viewBrowser"
+          data-view="browser"
+        >
+          内外网浏览器
+        </button>
+        <button
+          class="view-tab"
+          id="tabLan"
+          type="button"
+          role="tab"
+          aria-selected="false"
+          aria-controls="viewLan"
+          data-view="lan"
+        >
+          局域网快传
+          <span class="tab-dot" id="lanTabDot" hidden></span>
+        </button>
+      </nav>
+
+      <section class="view" id="viewBrowser" role="tabpanel" aria-labelledby="tabBrowser">
       <section class="update-banner" id="updateBanner" hidden>
         <span class="update-banner-icon" aria-hidden="true">↑</span>
         <div class="update-banner-copy">
@@ -287,6 +314,103 @@
           <span>Chrome / Edge：页面四周彩色边框、Tab 标题前缀；Firefox：窗口顶部同色色条。</span>
         </div>
       </section>
+      </section>
+
+      <section class="view" id="viewLan" role="tabpanel" aria-labelledby="tabLan" hidden>
+        <section class="card lan-hero">
+          <div class="lan-self">
+            <div class="lan-self-main">
+              <div>
+                <div class="section-kicker">
+                  <span class="lan-pulse" id="lanPulse"></span>
+                  局域网快传
+                </div>
+                <h2 id="lanSelfName">正在获取本机信息…</h2>
+                <div class="lan-self-meta">
+                  <span class="lan-chip" id="lanSelfIp">IP 检测中…</span>
+                  <span class="lan-chip" id="lanDiscovery">自动发现：检测中</span>
+                  <span class="lan-chip" id="lanVersion">—</span>
+                </div>
+              </div>
+            </div>
+            <div class="lan-self-actions">
+              <button class="text-button" id="lanRenameBtn" type="button">修改名称</button>
+              <button class="text-button" id="lanRefreshBtn" type="button">刷新</button>
+            </div>
+          </div>
+          <p class="lan-hint">
+            同一局域网内的同事打开本应用后会自动出现在下面。公司 Wi-Fi 关闭了设备互访时，可以让对方把 IP 发给你，手动添加。
+          </p>
+        </section>
+
+        <section class="card lan-card">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">在线同事</div>
+              <h2>选择一台电脑</h2>
+            </div>
+            <span class="lan-count" id="lanPeerCount">0 台在线</span>
+          </div>
+          <div class="lan-peer-list" id="lanPeerList">
+            <div class="lan-empty">正在搜索同一局域网内的同事…</div>
+          </div>
+          <div class="lan-add">
+            <input
+              id="lanAddIp"
+              type="text"
+              spellcheck="false"
+              autocomplete="off"
+              placeholder="手动输入同事 IP，如 192.168.2.35"
+              aria-label="手动输入同事 IP"
+            />
+            <button class="lan-add-btn" id="lanAddBtn" type="button">添加</button>
+          </div>
+          <p class="lan-hint" id="lanDiscoveryHint" hidden></p>
+        </section>
+
+        <section class="card lan-card">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">消息</div>
+              <h2>随手发条消息</h2>
+            </div>
+            <button class="text-button" id="lanClearMessages" type="button">清空记录</button>
+          </div>
+          <div class="lan-messages" id="lanMessages">
+            <div class="lan-empty">还没有消息。选择上面的同事后，在下面输入内容。</div>
+          </div>
+          <div class="lan-composer">
+            <span class="lan-to" id="lanComposerTo">未选择同事</span>
+            <input
+              id="lanMessageInput"
+              type="text"
+              autocomplete="off"
+              maxlength="2000"
+              placeholder="输入消息，回车发送"
+              aria-label="消息内容"
+            />
+            <button class="lan-send-btn" id="lanSendMessage" type="button">发送</button>
+          </div>
+        </section>
+
+        <section class="card lan-card">
+          <div class="section-head">
+            <div>
+              <div class="section-kicker">文件</div>
+              <h2>传到对方电脑</h2>
+            </div>
+            <button class="text-button" id="lanOpenDownloads" type="button">打开接收目录</button>
+          </div>
+          <div class="lan-files" id="lanFiles">
+            <div class="lan-empty">收到的文件会先出现在这里，点“保存”后才进入下载目录。</div>
+          </div>
+          <div class="lan-send-file-row">
+            <span class="lan-to" id="lanFileTo">未选择同事</span>
+            <button class="lan-pick-btn" id="lanPickFiles" type="button">选择文件并发送</button>
+          </div>
+          <p class="lan-hint">文件先暂存到对方应用内，对方确认后才会保存。单个文件最大 2 GB。</p>
+        </section>
+      </section>
 
       <footer class="footer">
         <span>不修改系统 DNS 与 hosts</span>
@@ -374,6 +498,21 @@ const info = window.__DUALDNS_ENV__;
               Firefox 不支持页面内注入，Agent 可改用窗口顶部色条、独立配置目录或代理端口判断。
               第一次打开页面时标识注入可能有短暂延迟，读取不到时等待页面加载完成或稍后重试。
             </p>
+          </section>
+
+          <section class="help-section">
+            <h3>局域网快传</h3>
+            <p>
+              “局域网快传”用于在同一 Wi-Fi / 局域网内发现同事的电脑，发送短消息或文件。消息和文件只在本机与同事电脑之间传输，不上传到 Gitee、GitHub 或任何云端服务。
+            </p>
+            <ul class="help-list">
+              <li>双方都需要打开 DualDNS Browser，并连接到同一个可互访的局域网。</li>
+              <li>自动发现使用 UDP <code>18191</code>，消息和文件传输使用 TCP <code>18190</code>。Windows 首次询问防火墙权限时请选择允许“专用网络”。</li>
+              <li>公司 Wi-Fi 开启 AP 隔离 / 客户端隔离时，设备之间无法互访，自动发现会失败；可以尝试让同事把 IP 发给你后手动添加。</li>
+              <li>点击同事后可以发消息或选择文件。收到的文件会先暂存，点“保存”后才会进入下载目录：macOS 为 <code>~/Downloads/DualDNS Transfers</code>，Windows 为 <code>%USERPROFILE%\Downloads\DualDNS Transfers</code>。</li>
+              <li>单个文件最大 2 GB；文件越大，传输时间越长。传输出错时先确认双方仍在同一网络、应用未退出，并检查防火墙。</li>
+              <li>局域网传输使用本机 HTTP 协议，<strong>没有端到端加密</strong>。请只在可信的公司网络或家庭网络使用，不要在公共 Wi-Fi 上传输敏感文件。</li>
+            </ul>
           </section>
 
           <section class="help-section">
@@ -477,7 +616,7 @@ const info = window.__DUALDNS_ENV__;
           <div class="update-toolbar">
             <div class="update-current">
               <span class="update-label">当前版本</span>
-              <strong id="updateCurrentVersion">v1.1.5</strong>
+              <strong id="updateCurrentVersion">v1.2.0</strong>
             </div>
             <label class="update-source" for="updateSource">
               <span class="update-label">更新源</span>
@@ -517,7 +656,7 @@ const info = window.__DUALDNS_ENV__;
             <div class="update-result-head">
               <div>
                 <span class="update-label">最新版本</span>
-                <strong id="updateLatest">v1.1.5</strong>
+                <strong id="updateLatest">v1.2.0</strong>
               </div>
               <span class="update-badge" id="updateBadge">有新版本</span>
             </div>

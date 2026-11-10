@@ -67,6 +67,32 @@ const updateOther = document.getElementById("updateOther");
 const updateDownloads = document.getElementById("updateDownloads");
 const updateRelease = document.getElementById("updateRelease");
 const updatePlatform = document.getElementById("updatePlatform");
+const tabBrowser = document.getElementById("tabBrowser");
+const tabLan = document.getElementById("tabLan");
+const viewBrowser = document.getElementById("viewBrowser");
+const viewLan = document.getElementById("viewLan");
+const lanTabDot = document.getElementById("lanTabDot");
+const lanPulse = document.getElementById("lanPulse");
+const lanSelfName = document.getElementById("lanSelfName");
+const lanSelfIp = document.getElementById("lanSelfIp");
+const lanDiscovery = document.getElementById("lanDiscovery");
+const lanVersion = document.getElementById("lanVersion");
+const lanRenameBtn = document.getElementById("lanRenameBtn");
+const lanRefreshBtn = document.getElementById("lanRefreshBtn");
+const lanPeerCount = document.getElementById("lanPeerCount");
+const lanPeerList = document.getElementById("lanPeerList");
+const lanAddIp = document.getElementById("lanAddIp");
+const lanAddBtn = document.getElementById("lanAddBtn");
+const lanDiscoveryHint = document.getElementById("lanDiscoveryHint");
+const lanMessages = document.getElementById("lanMessages");
+const lanClearMessages = document.getElementById("lanClearMessages");
+const lanComposerTo = document.getElementById("lanComposerTo");
+const lanMessageInput = document.getElementById("lanMessageInput");
+const lanSendMessage = document.getElementById("lanSendMessage");
+const lanFiles = document.getElementById("lanFiles");
+const lanOpenDownloads = document.getElementById("lanOpenDownloads");
+const lanFileTo = document.getElementById("lanFileTo");
+const lanPickFiles = document.getElementById("lanPickFiles");
 
 const DEFAULTS = {
   internal_dns: "192.168.2.19",
@@ -78,6 +104,7 @@ const DEFAULTS = {
 
 const AUTO = "__auto__";
 const CUSTOM = "__custom__";
+const LAN_PORT_FALLBACK = 18190;
 
 let savedSettings = { ...DEFAULTS };
 let browserOptions = [];
@@ -91,9 +118,21 @@ let updateBusy = false;
 let updateInstallBusy = false;
 let updateInstallLink = null;
 let updateSource = readStorage("dualdns.updateSource", "auto");
-let currentVersion = "1.1.8";
+let currentVersion = "1.2.0";
 let currentPlatformLabel = "";
 let dismissedUpdate = readStorage("dualdns.dismissedUpdate", "");
+let currentView = "browser";
+let lanPollTimer = null;
+let lanRefreshing = false;
+let lanSnapshotData = null;
+let lanSelectedPeerId = "";
+let lanActionBusy = false;
+let lanRenameEditing = false;
+let lanRenameOriginal = "";
+let lanSeenAttention = new Set();
+let lanAttentionPrimed = false;
+let lanAttentionCount = 0;
+let lanMessageSignature = "";
 
 function readStorage(key, fallback) {
   try {
@@ -782,6 +821,560 @@ async function loadSettings() {
   }
 }
 
+function lanElement(tag, className, text) {
+  const element = document.createElement(tag);
+  if (className) element.className = className;
+  if (text !== undefined) element.textContent = text;
+  return element;
+}
+
+function lanPlatformLabel(platform) {
+  if (platform === "darwin") return "macOS";
+  if (platform === "windows") return "Windows";
+  if (platform === "linux") return "Linux";
+  return platform || "未知系统";
+}
+
+function formatLanTime(value) {
+  const date = new Date(Number(value) || 0);
+  if (Number.isNaN(date.getTime()) || date.getTime() <= 0) return "";
+  const now = new Date();
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  return date.toLocaleString("zh-CN", sameDay
+    ? { hour: "2-digit", minute: "2-digit" }
+    : { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function selectedLanPeer() {
+  if (!lanSelectedPeerId || !Array.isArray(lanSnapshotData?.peers)) return null;
+  return lanSnapshotData.peers.find((peer) => peer.id === lanSelectedPeerId) || null;
+}
+
+function updateLanAttention() {
+  const visible = lanAttentionCount > 0 && currentView !== "lan";
+  lanTabDot.hidden = !visible;
+  tabLan.title = visible
+    ? `有 ${lanAttentionCount} 条新的局域网消息或待接收文件`
+    : "查看同一局域网内的同事";
+}
+
+function syncLanAttention(data) {
+  const ids = [];
+  (Array.isArray(data.messages) ? data.messages : [])
+    .filter((message) => message.direction === "in")
+    .forEach((message) => ids.push(`message:${message.id}`));
+  (Array.isArray(data.incoming) ? data.incoming : [])
+    .forEach((item) => ids.push(`file:${item.id}`));
+
+  if (!lanAttentionPrimed) {
+    ids.forEach((id) => lanSeenAttention.add(id));
+    lanAttentionPrimed = true;
+  } else {
+    let fresh = 0;
+    ids.forEach((id) => {
+      if (!lanSeenAttention.has(id)) {
+        lanSeenAttention.add(id);
+        fresh += 1;
+      }
+    });
+    if (fresh > 0 && currentView !== "lan") {
+      lanAttentionCount += fresh;
+    }
+  }
+
+  if (currentView === "lan") lanAttentionCount = 0;
+  updateLanAttention();
+}
+
+function renderLanTargets() {
+  const peer = selectedLanPeer();
+  const target = peer ? `发给 ${peer.name}` : "未选择同事";
+  lanComposerTo.textContent = target;
+  lanFileTo.textContent = target;
+  lanSendMessage.disabled = !peer || lanActionBusy;
+  lanPickFiles.disabled = !peer || lanActionBusy;
+  lanAddBtn.disabled = lanActionBusy;
+  lanRenameBtn.disabled = lanActionBusy;
+}
+
+function selectLanPeer(peerId, options = {}) {
+  if (!lanSnapshotData?.peers?.some((peer) => peer.id === peerId)) return;
+  lanSelectedPeerId = peerId;
+  renderLanPeers(lanSnapshotData.peers);
+  renderLanTargets();
+  if (options.focusMessage) {
+    lanMessageInput.focus();
+  }
+  if (options.sendFiles) {
+    pickAndSendLanFiles();
+  }
+}
+
+function renderLanPeers(peers) {
+  if (lanSelectedPeerId && !peers.some((peer) => peer.id === lanSelectedPeerId)) {
+    lanSelectedPeerId = "";
+  }
+  const online = peers.filter((peer) => peer.online).length;
+  lanPeerCount.textContent = `${online} 台在线 · 共 ${peers.length} 台`;
+  lanPeerList.textContent = "";
+
+  if (peers.length === 0) {
+    lanPeerList.appendChild(lanElement(
+      "div",
+      "lan-empty",
+      "还没有发现同事。请确认对方也打开了本应用，并连接同一个 Wi-Fi / 局域网。",
+    ));
+    renderLanTargets();
+    return;
+  }
+
+  peers.forEach((peer) => {
+    const selected = peer.id === lanSelectedPeerId;
+    const row = lanElement("div", `lan-peer${selected ? " selected" : ""}${peer.online ? "" : " offline"}`);
+    row.tabIndex = 0;
+    row.setAttribute("role", "button");
+    row.setAttribute("aria-pressed", selected ? "true" : "false");
+
+    const avatar = lanElement(
+      "span",
+      "lan-peer-avatar",
+      Array.from(String(peer.name || "同事"))[0] || "同",
+    );
+    const main = lanElement("span", "lan-peer-main");
+    main.appendChild(lanElement("strong", "", peer.name || "未命名电脑"));
+    const detail = [`${peer.ip || "IP 未知"}:${peer.port || LAN_PORT_FALLBACK}`];
+    if (peer.platform) detail.push(lanPlatformLabel(peer.platform));
+    if (peer.manual) detail.push("手动添加");
+    main.appendChild(lanElement("span", "", detail.join(" · ")));
+
+    const status = lanElement(
+      "span",
+      `lan-peer-status${peer.online ? "" : " offline"}`,
+      peer.online ? "在线" : "离线",
+    );
+    const actions = lanElement("span", "lan-peer-actions");
+    const messageBtn = lanElement("button", "", "发消息");
+    messageBtn.type = "button";
+    messageBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      selectLanPeer(peer.id, { focusMessage: true });
+    });
+    const fileBtn = lanElement("button", "", "传文件");
+    fileBtn.type = "button";
+    fileBtn.disabled = lanActionBusy;
+    fileBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      selectLanPeer(peer.id, { sendFiles: true });
+    });
+    actions.append(messageBtn, fileBtn);
+
+    row.append(avatar, main, status, actions);
+    row.addEventListener("click", () => selectLanPeer(peer.id));
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectLanPeer(peer.id);
+      }
+    });
+    lanPeerList.appendChild(row);
+  });
+  renderLanTargets();
+}
+
+function renderLanMessages(messages) {
+  const signature = messages.map((message) => `${message.id}:${message.at}`).join("|");
+  if (signature === lanMessageSignature) return;
+  const nearBottom =
+    lanMessages.scrollHeight - lanMessages.scrollTop - lanMessages.clientHeight < 64;
+  lanMessageSignature = signature;
+  lanMessages.textContent = "";
+
+  if (messages.length === 0) {
+    lanMessages.appendChild(lanElement(
+      "div",
+      "lan-empty",
+      "还没有消息。选择上面的同事后，在下面输入内容。",
+    ));
+    return;
+  }
+
+  messages.forEach((message) => {
+    const item = lanElement(
+      "article",
+      `lan-message${message.direction === "out" ? " out" : ""}`,
+    );
+    const head = lanElement("div", "lan-message-head");
+    const direction = message.direction === "out" ? "发给" : "来自";
+    head.textContent = `${direction} ${message.peerName || "同事"} · ${formatLanTime(message.at)}`;
+    item.append(head, lanElement("div", "lan-message-body", message.text || ""));
+    lanMessages.appendChild(item);
+  });
+  if (nearBottom) lanMessages.scrollTop = lanMessages.scrollHeight;
+}
+
+function renderLanFiles(incoming, outgoing) {
+  lanFiles.textContent = "";
+  const pending = Array.isArray(incoming) ? incoming : [];
+  const sent = Array.isArray(outgoing) ? outgoing.slice(0, 12) : [];
+
+  if (pending.length === 0 && sent.length === 0) {
+    lanFiles.appendChild(lanElement(
+      "div",
+      "lan-empty",
+      "收到的文件会先出现在这里，点“保存”后才进入下载目录。",
+    ));
+    return;
+  }
+
+  pending.forEach((item) => {
+    const row = lanElement("article", "lan-file incoming");
+    const icon = lanElement("span", "lan-file-icon", "↓");
+    const main = lanElement("span", "lan-file-main");
+    main.appendChild(lanElement("span", "lan-file-name", item.fileName || "未命名文件"));
+    const source = item.fromName || "同事";
+    const ip = item.fromIp ? ` · ${item.fromIp}` : "";
+    main.appendChild(lanElement(
+      "span",
+      "lan-file-meta",
+      `${source}${ip} · ${formatBytes(item.size)} · ${formatLanTime(item.at)}`,
+    ));
+    const actions = lanElement("span", "lan-file-actions");
+    const accept = lanElement("button", "accept", "保存");
+    accept.type = "button";
+    accept.disabled = lanActionBusy;
+    accept.addEventListener("click", () => acceptLanFile(item.id, accept));
+    const discard = lanElement("button", "", "忽略");
+    discard.type = "button";
+    discard.disabled = lanActionBusy;
+    discard.addEventListener("click", () => discardLanFile(item.id, discard));
+    actions.append(accept, discard);
+    row.append(icon, main, actions);
+    lanFiles.appendChild(row);
+  });
+
+  sent.forEach((item) => {
+    const percent = item.size > 0
+      ? Math.max(0, Math.min(100, Math.round((Number(item.done) / Number(item.size)) * 100)))
+      : 0;
+    const statusText =
+      item.status === "done" ? "已发送" : item.status === "error" ? "发送失败" : `发送中 ${percent}%`;
+    const row = lanElement("article", "lan-file");
+    const icon = lanElement("span", "lan-file-icon", "↑");
+    const main = lanElement("span", "lan-file-main");
+    main.appendChild(lanElement("span", "lan-file-name", item.fileName || "未命名文件"));
+    main.appendChild(lanElement(
+      "span",
+      "lan-file-meta",
+      `发给 ${item.peerName || "同事"} · ${statusText} · ${formatBytes(item.size)}`,
+    ));
+    if (item.status === "sending") {
+      const progress = lanElement("span", "lan-progress");
+      const bar = lanElement("span");
+      bar.style.width = `${percent}%`;
+      progress.appendChild(bar);
+      main.appendChild(progress);
+    } else if (item.status === "error" && item.error) {
+      main.appendChild(lanElement("span", "lan-file-meta", item.error));
+    }
+    row.append(icon, main);
+    lanFiles.appendChild(row);
+  });
+}
+
+function renderLanSnapshot(data) {
+  lanSnapshotData = data;
+  const self = data.self || {};
+  lanPulse.className = "lan-pulse online";
+  if (!lanRenameEditing) {
+    lanSelfName.textContent = self.name || "未命名电脑";
+  }
+  lanSelfIp.textContent = self.ip ? `IP ${self.ip}` : "未检测到局域网 IP";
+  lanSelfIp.title = Array.isArray(self.ips) ? self.ips.join(" · ") : "";
+  lanDiscovery.textContent = self.discovery
+    ? "自动发现：在线"
+    : `自动发现：${self.discoveryMessage || "不可用"}`;
+  lanDiscovery.title = self.discoveryMessage || "";
+  lanDiscovery.classList.toggle("warn", !self.discovery);
+  lanVersion.textContent = self.version ? `v${self.version} · ${lanPlatformLabel(self.platform)}` : "—";
+
+  lanDiscoveryHint.hidden = Boolean(self.discovery);
+  lanDiscoveryHint.classList.toggle("warn", !self.discovery);
+  lanDiscoveryHint.textContent = self.discovery
+    ? ""
+    : `${self.discoveryMessage || "自动发现不可用"}。仍可让同事把 IP 发给你，在下方手动添加。`;
+
+  renderLanPeers(Array.isArray(data.peers) ? data.peers : []);
+  renderLanMessages(Array.isArray(data.messages) ? data.messages : []);
+  renderLanFiles(data.incoming, data.outgoing);
+  syncLanAttention(data);
+}
+
+function renderLanFailure(message) {
+  lanPulse.className = "lan-pulse offline";
+  if (!lanSnapshotData) {
+    lanSelfName.textContent = "局域网服务未就绪";
+    lanSelfIp.textContent = "IP 检测中…";
+    lanDiscovery.textContent = "自动发现：未连接";
+    lanVersion.textContent = "—";
+    lanPeerCount.textContent = "0 台在线";
+    lanPeerList.textContent = "";
+    lanPeerList.appendChild(lanElement("div", "lan-empty", message));
+  }
+  lanDiscoveryHint.hidden = false;
+  lanDiscoveryHint.classList.add("warn");
+  lanDiscoveryHint.textContent = message;
+}
+
+async function refreshLan({ silent = false } = {}) {
+  if (lanRefreshing) return;
+  if (!invoke) {
+    renderLanFailure("当前为界面预览模式，桌面应用中才能使用局域网快传。");
+    return;
+  }
+  lanRefreshing = true;
+  try {
+    const data = await invoke("lan_snapshot");
+    renderLanSnapshot(data);
+  } catch (error) {
+    renderLanFailure(friendlyError(error));
+    if (!silent) showToast(friendlyError(error), "error");
+  } finally {
+    lanRefreshing = false;
+  }
+}
+
+function scheduleLanPolling() {
+  if (lanPollTimer) window.clearInterval(lanPollTimer);
+  const delay = currentView === "lan" ? 1500 : 7000;
+  lanPollTimer = window.setInterval(() => refreshLan({ silent: true }), delay);
+}
+
+function setView(view) {
+  currentView = view === "lan" ? "lan" : "browser";
+  const lanActive = currentView === "lan";
+  tabBrowser.classList.toggle("active", !lanActive);
+  tabLan.classList.toggle("active", lanActive);
+  tabBrowser.setAttribute("aria-selected", lanActive ? "false" : "true");
+  tabLan.setAttribute("aria-selected", lanActive ? "true" : "false");
+  viewBrowser.hidden = lanActive;
+  viewLan.hidden = !lanActive;
+  if (lanActive) {
+    lanAttentionCount = 0;
+    updateLanAttention();
+    refreshLan({ silent: false });
+  }
+  scheduleLanPolling();
+}
+
+function setLanActionBusy(value) {
+  lanActionBusy = value;
+  lanClearMessages.disabled = value;
+  lanRefreshBtn.disabled = value;
+  lanOpenDownloads.disabled = value;
+  renderLanTargets();
+}
+
+async function sendLanMessage() {
+  if (lanActionBusy) return;
+  const peer = selectedLanPeer();
+  const text = lanMessageInput.value.trim();
+  if (!peer) {
+    showToast("请先选择一个同事的设备", "error");
+    return;
+  }
+  if (!text) {
+    showToast("请输入消息内容", "error");
+    lanMessageInput.focus();
+    return;
+  }
+  if (!invoke) {
+    showToast("当前为界面预览模式，桌面应用中才能发送消息", "error");
+    return;
+  }
+  setLanActionBusy(true);
+  try {
+    await invoke("lan_send_message", { peerId: peer.id, text });
+    lanMessageInput.value = "";
+    lanMessageSignature = "";
+    await refreshLan({ silent: true });
+    showToast(`消息已发给 ${peer.name}`, "success");
+    lanMessageInput.focus();
+  } catch (error) {
+    showToast(friendlyError(error), "error");
+  } finally {
+    setLanActionBusy(false);
+  }
+}
+
+async function pickAndSendLanFiles() {
+  if (lanActionBusy) return;
+  const peer = selectedLanPeer();
+  if (!peer) {
+    showToast("请先选择一个同事的设备", "error");
+    return;
+  }
+  if (!invoke) {
+    showToast("当前为界面预览模式，桌面应用中才能发送文件", "error");
+    return;
+  }
+  setLanActionBusy(true);
+  try {
+    const paths = await invoke("lan_pick_files");
+    if (!Array.isArray(paths) || paths.length === 0) return;
+    const result = await invoke("lan_send_files", { peerId: peer.id, paths });
+    await refreshLan({ silent: true });
+    if (result?.sent > 0) {
+      showToast(`已开始向 ${peer.name} 发送 ${result.sent} 个文件`, "success");
+    }
+    if (Array.isArray(result?.errors) && result.errors.length > 0) {
+      showToast(result.errors[0], "error");
+    }
+  } catch (error) {
+    showToast(friendlyError(error), "error");
+  } finally {
+    setLanActionBusy(false);
+  }
+}
+
+async function addLanPeer() {
+  if (lanActionBusy) return;
+  const ip = lanAddIp.value.trim();
+  if (!ip) {
+    showToast("请输入同事的 IP 地址", "error");
+    lanAddIp.focus();
+    return;
+  }
+  if (!invoke) {
+    showToast("当前为界面预览模式，桌面应用中才能添加设备", "error");
+    return;
+  }
+  setLanActionBusy(true);
+  lanAddBtn.textContent = "连接中…";
+  try {
+    const result = await invoke("lan_add_peer", { ip });
+    lanAddIp.value = "";
+    if (result?.peer?.id) lanSelectedPeerId = result.peer.id;
+    await refreshLan({ silent: true });
+    showToast(`已添加 ${result?.peer?.name || "同事"}`, "success");
+  } catch (error) {
+    showToast(friendlyError(error), "error");
+  } finally {
+    lanAddBtn.textContent = "添加";
+    setLanActionBusy(false);
+  }
+}
+
+async function acceptLanFile(id, button) {
+  if (lanActionBusy) return;
+  setLanActionBusy(true);
+  button.textContent = "保存中…";
+  try {
+    const result = await invoke("lan_accept_transfer", { id });
+    await refreshLan({ silent: true });
+    showToast(`文件已保存到 ${result?.savedPath || "接收目录"}`, "success");
+  } catch (error) {
+    showToast(friendlyError(error), "error");
+  } finally {
+    setLanActionBusy(false);
+  }
+}
+
+async function discardLanFile(id, button) {
+  if (lanActionBusy) return;
+  setLanActionBusy(true);
+  button.textContent = "处理中…";
+  try {
+    await invoke("lan_discard_transfer", { id });
+    await refreshLan({ silent: true });
+    showToast("已忽略该文件");
+  } catch (error) {
+    showToast(friendlyError(error), "error");
+  } finally {
+    setLanActionBusy(false);
+  }
+}
+
+async function clearLanMessages() {
+  if (lanActionBusy || !invoke) return;
+  if (!window.confirm("清空本机保存的局域网消息记录？已接收的文件不会删除。")) return;
+  setLanActionBusy(true);
+  try {
+    await invoke("lan_clear_messages");
+    lanMessageSignature = "";
+    await refreshLan({ silent: true });
+    showToast("消息记录已清空", "success");
+  } catch (error) {
+    showToast(friendlyError(error), "error");
+  } finally {
+    setLanActionBusy(false);
+  }
+}
+
+function endLanRename(restore = false) {
+  lanRenameEditing = false;
+  lanSelfName.removeAttribute("contenteditable");
+  lanSelfName.classList.remove("editing");
+  lanRenameBtn.textContent = "修改名称";
+  lanRenameBtn.disabled = false;
+  if (restore) {
+    lanSelfName.textContent = lanRenameOriginal;
+  } else if (lanSnapshotData?.self?.name) {
+    lanSelfName.textContent = lanSnapshotData.self.name;
+  }
+}
+
+async function saveLanRename() {
+  if (!lanRenameEditing) return;
+  const name = lanSelfName.textContent.trim();
+  if (!name) {
+    showToast("电脑名称不能为空", "error");
+    lanSelfName.focus();
+    return;
+  }
+  if (name === lanRenameOriginal) {
+    endLanRename();
+    return;
+  }
+  lanRenameBtn.disabled = true;
+  try {
+    const result = await invoke("lan_set_name", { name });
+    lanRenameOriginal = name;
+    endLanRename();
+    if (result?.snapshot) renderLanSnapshot(result.snapshot);
+    showToast("电脑名称已更新", "success");
+  } catch (error) {
+    showToast(friendlyError(error), "error");
+    lanRenameBtn.disabled = false;
+    lanSelfName.focus();
+  }
+}
+
+function toggleLanRename() {
+  if (lanRenameEditing) {
+    saveLanRename();
+    return;
+  }
+  if (!lanSnapshotData?.self) {
+    showToast("本机信息尚未就绪，请稍后重试", "error");
+    return;
+  }
+  lanRenameEditing = true;
+  lanRenameOriginal = lanSnapshotData.self.name || "";
+  lanSelfName.textContent = lanRenameOriginal;
+  lanSelfName.setAttribute("contenteditable", "true");
+  lanSelfName.classList.add("editing");
+  lanRenameBtn.textContent = "保存名称";
+  lanSelfName.focus();
+  const range = document.createRange();
+  range.selectNodeContents(lanSelfName);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
 [internalInput, externalInput, browserPath].forEach((input) => {
   input.addEventListener("input", () => {
     refreshDemoDns();
@@ -856,6 +1449,53 @@ stopProxiesBtn.addEventListener("keydown", (event) => {
 openInternal.addEventListener("click", () => openEnv("internal"));
 openExternal.addEventListener("click", () => openEnv("external"));
 openBoth.addEventListener("click", () => openBothEnvs());
+tabBrowser.addEventListener("click", () => setView("browser"));
+tabLan.addEventListener("click", () => setView("lan"));
+[tabBrowser, tabLan].forEach((tab) => {
+  tab.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const next = currentView === "browser" ? "lan" : "browser";
+    setView(next);
+    (next === "lan" ? tabLan : tabBrowser).focus();
+  });
+});
+lanRenameBtn.addEventListener("click", toggleLanRename);
+lanSelfName.addEventListener("keydown", (event) => {
+  if (!lanRenameEditing) return;
+  if (event.key === "Enter") {
+    event.preventDefault();
+    saveLanRename();
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    endLanRename(true);
+  }
+});
+lanRefreshBtn.addEventListener("click", () => refreshLan({ silent: false }));
+lanAddBtn.addEventListener("click", addLanPeer);
+lanAddIp.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    addLanPeer();
+  }
+});
+lanSendMessage.addEventListener("click", sendLanMessage);
+lanMessageInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    sendLanMessage();
+  }
+});
+lanPickFiles.addEventListener("click", pickAndSendLanFiles);
+lanClearMessages.addEventListener("click", clearLanMessages);
+lanOpenDownloads.addEventListener("click", async () => {
+  if (!invoke) return;
+  try {
+    await invoke("lan_open_downloads");
+  } catch (error) {
+    showToast(friendlyError(error), "error");
+  }
+});
 helpBtn.addEventListener("click", openHelp);
 helpClose.addEventListener("click", closeHelp);
 helpModal.addEventListener("click", (event) => {
@@ -918,5 +1558,11 @@ function notifyUiReady() {
 
 notifyUiReady();
 loadSettings().then(refreshStatus).then(initUpdates);
+renderLanTargets();
+scheduleLanPolling();
+window.setTimeout(() => refreshLan({ silent: true }), 1200);
 statusTimer = window.setInterval(refreshStatus, 2500);
-window.addEventListener("beforeunload", () => window.clearInterval(statusTimer));
+window.addEventListener("beforeunload", () => {
+  window.clearInterval(statusTimer);
+  if (lanPollTimer) window.clearInterval(lanPollTimer);
+});

@@ -1,6 +1,6 @@
 [package]
 name = "dual-dns-browser"
-version = "1.2.1"
+version = "1.2.2"
 description = "DualDNS Browser"
 authors = ["DualDNS"]
 edition = "2021"
@@ -21,6 +21,7 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-shell = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
 tungstenite = "0.24"
 ureq = { version = "2.12", default-features = false, features = ["native-tls", "gzip", "proxy-from-env"] }
 

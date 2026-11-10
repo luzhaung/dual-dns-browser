@@ -6,7 +6,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs::{self, OpenOptions},
     io::{Read, Write},
-    net::{IpAddr, SocketAddr, TcpStream, UdpSocket},
+    net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -1925,50 +1925,144 @@ fn lan_open_downloads(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-fn lan_probe_network_access(ip: Option<String>) -> Result<String, String> {
-    let mut attempted = false;
-    if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
-        if socket.set_broadcast(true).is_ok()
-            && socket
-                .send_to(b"dualdns-local-network-check", "255.255.255.255:18191")
-                .is_ok()
-        {
-            attempted = true;
-        }
-    }
+#[derive(Debug, Serialize)]
+struct LanProbeResult {
+    attempts: usize,
+    udp_sends: usize,
+    tcp_attempts: usize,
+    message: String,
+}
 
-    if let Some(raw_ip) = ip {
-        if let Ok(address) = raw_ip.parse::<IpAddr>() {
-            if !address.is_loopback() {
-                let target = SocketAddr::new(address, LAN_PORT);
-                let _ = TcpStream::connect_timeout(&target, Duration::from_millis(1200));
-                attempted = true;
+#[tauri::command]
+async fn lan_probe_network_access(
+    ip: Option<String>,
+    peers: Option<Vec<String>>,
+) -> Result<LanProbeResult, String> {
+    tauri::async_runtime::spawn_blocking(move || probe_lan_network_access_blocking(ip, peers))
+        .await
+        .map_err(|error| format!("发起局域网访问失败: {error}"))?
+}
+
+fn probe_lan_network_access_blocking(
+    ip: Option<String>,
+    peers: Option<Vec<String>>,
+) -> Result<LanProbeResult, String> {
+    let mut targets = HashSet::<Ipv4Addr>::new();
+    targets.insert(Ipv4Addr::BROADCAST);
+    targets.insert(Ipv4Addr::new(224, 0, 0, 251));
+
+    if let Some(raw_ip) = ip.as_deref() {
+        if let Ok(IpAddr::V4(address)) = raw_ip.parse::<IpAddr>() {
+            if !address.is_loopback() && !address.is_unspecified() {
+                let octets = address.octets();
+                targets.insert(address);
+                targets.insert(Ipv4Addr::new(octets[0], octets[1], octets[2], 255));
+                targets.insert(Ipv4Addr::new(octets[0], octets[1], octets[2], 1));
             }
         }
     }
 
-    if attempted {
-        Ok("已发起局域网访问".to_string())
-    } else {
-        Err("无法发起局域网访问，请检查网络连接".to_string())
+    for raw_ip in peers.unwrap_or_default() {
+        if let Ok(IpAddr::V4(address)) = raw_ip.trim().parse::<IpAddr>() {
+            if !address.is_loopback() && !address.is_unspecified() {
+                targets.insert(address);
+            }
+        }
     }
+
+    let mut udp_sends = 0;
+    if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
+        if socket.set_broadcast(true).is_ok() {
+            for _ in 0..2 {
+                for target in &targets {
+                    if socket
+                        .send_to(
+                            b"dualdns-local-network-check",
+                            SocketAddr::new(IpAddr::V4(*target), LAN_DISCOVERY_PORT),
+                        )
+                        .is_ok()
+                    {
+                        udp_sends += 1;
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(140));
+            }
+        }
+    }
+
+    let mut tcp_attempts = 0;
+    for target in &targets {
+        if target.is_broadcast() || target.is_multicast() {
+            continue;
+        }
+        let _ = TcpStream::connect_timeout(
+            &SocketAddr::new(IpAddr::V4(*target), LAN_PORT),
+            Duration::from_millis(260),
+        );
+        tcp_attempts += 1;
+    }
+
+    let attempts = udp_sends + tcp_attempts;
+    if attempts == 0 {
+        return Err("无法发起局域网访问，请检查网络连接".to_string());
+    }
+
+    let message = format!(
+        "已探测 {} 个局域网地址（广播 {} 次，连接 {} 个地址）",
+        targets.len(),
+        udp_sends,
+        tcp_attempts
+    );
+    Ok(LanProbeResult {
+        attempts,
+        udp_sends,
+        tcp_attempts,
+        message,
+    })
 }
 
 #[tauri::command]
-fn open_lan_privacy_settings() -> Result<(), String> {
+fn open_lan_privacy_settings() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
         Command::new("open")
             .arg("x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_LocalNetwork")
             .spawn()
             .map_err(|error| format!("打开系统设置失败: {error}"))?;
-        return Ok(());
+        return Ok(
+            "已打开“系统设置 → 隐私与安全性”。macOS 26 可能停在隐私首页，请向下滚动并点“本地网络”。"
+                .to_string(),
+        );
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     {
-        Err("只有 macOS 需要单独设置本地网络权限".to_string())
+        Command::new("control.exe")
+            .arg("firewall.cpl")
+            .spawn()
+            .map_err(|error| format!("打开 Windows 防火墙失败: {error}"))?;
+        return Ok(
+            "已打开 Windows 防火墙。请点“允许应用通过防火墙”，勾选 DualDNS Browser 的专用网络权限。"
+                .to_string(),
+        );
     }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let _ = Command::new("xdg-open").arg("settings://network").spawn();
+        return Ok("请检查系统防火墙是否允许 DualDNS Browser 访问局域网。".to_string());
+    }
+    #[allow(unreachable_code)]
+    Err("当前系统不需要单独设置局域网权限".to_string())
+}
+
+#[tauri::command]
+fn notify_lan_event(app: AppHandle, title: String, body: String) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|error| format!("发送系统通知失败: {error}"))
 }
 
 pub fn run() {
@@ -1978,6 +2072,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState::default())
         .setup(|app| {
             let handle = app.handle().clone();
@@ -2087,7 +2182,8 @@ pub fn run() {
             lan_clear_messages,
             lan_open_downloads,
             lan_probe_network_access,
-            open_lan_privacy_settings
+            open_lan_privacy_settings,
+            notify_lan_event
         ])
         .build(tauri::generate_context!())
         .expect("error while building DualDNS Browser");

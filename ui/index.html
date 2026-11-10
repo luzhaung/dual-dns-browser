@@ -24,7 +24,7 @@
           title="检查更新"
         >
           <span class="version-dot" id="versionDot"></span>
-          <span id="versionLabel">v1.2.1</span>
+          <span id="versionLabel">v1.2.2</span>
           <svg class="version-refresh" viewBox="0 0 16 16" aria-hidden="true">
             <path
               d="M13 8a5 5 0 1 1-1.46-3.54M13 3v3.2H9.8"
@@ -511,6 +511,7 @@ const info = window.__DUALDNS_ENV__;
               <li>自动发现使用 UDP <code>18191</code>，消息和文件传输使用 TCP <code>18190</code>。Windows 首次询问防火墙权限时请选择允许“专用网络”。</li>
               <li>公司 Wi-Fi 开启 AP 隔离 / 客户端隔离时，设备之间无法互访，自动发现会失败；可以尝试让同事把 IP 发给你后手动添加。</li>
               <li>点击同事后可以发消息或选择文件。收到的文件会先暂存，点“保存”后才会进入下载目录：macOS 为 <code>~/Downloads/DualDNS Transfers</code>，Windows 为 <code>%USERPROFILE%\Downloads\DualDNS Transfers</code>。</li>
+              <li>收到新消息或文件时，系统会弹出通知；如果收不到通知，请在系统设置中允许 DualDNS Browser 发送通知。</li>
               <li>单个文件最大 2 GB；文件越大，传输时间越长。传输出错时先确认双方仍在同一网络、应用未退出，并检查防火墙。</li>
               <li>局域网传输使用本机 HTTP 协议，<strong>没有端到端加密</strong>。请只在可信的公司网络或家庭网络使用，不要在公共 Wi-Fi 上传输敏感文件。</li>
             </ul>
@@ -560,7 +561,11 @@ const info = window.__DUALDNS_ENV__;
             </div>
             <div class="faq-item">
               <strong>macOS 上看不到同事的电脑？</strong>
-              <p>先到“局域网快传”页点“局域网权限”，再点“发起局域网访问”。系统弹出本地网络授权时选择“允许”。重装应用通常会沿用之前的系统授权，因此没有再次弹窗不等于没有权限；请打开“系统设置 → 隐私与安全性 → 本地网络”，确认 DualDNS Browser 已打开。如果两台电脑分属不同网段或公司开启了设备隔离，自动发现也可能受限，可以手动添加对方 IP。</p>
+              <p>先到“局域网快传”页点“局域网权限”，再点“发起局域网访问”。应用会显示探测了多少个地址；系统弹出本地网络授权时选择“允许”。如果点“打开系统设置”后只停在“隐私与安全性”首页，请向下滚动并点“本地网络”，确认 DualDNS Browser 已打开。重装应用通常会沿用之前的系统授权，没有再次弹窗不等于没有权限。如果两台电脑分属不同网段或公司开启了设备隔离，自动发现也可能受限，可以手动添加对方 IP。</p>
+            </div>
+            <div class="faq-item">
+              <strong>Windows 上看不到同事的电脑？</strong>
+              <p>到“局域网快传”页点“局域网权限”，再点“发起局域网访问”和“打开防火墙设置”。在 Windows 防火墙中允许 DualDNS Browser 通过“专用网络”，然后重新打开应用。公司 Wi-Fi 开了客户端隔离时，仍需手动添加对方 IP。</p>
             </div>
             <div class="faq-item">
               <strong>开了 Clash / VPN 的 TUN 模式后，外网窗口打不开网站？</strong>
@@ -605,10 +610,18 @@ const info = window.__DUALDNS_ENV__;
         aria-labelledby="lanPermissionTitle"
         tabindex="-1"
       >
-        <header class="help-head">
-          <div>
-            <div class="section-kicker">LOCAL NETWORK</div>
-            <h2 id="lanPermissionTitle">局域网权限</h2>
+        <header class="help-head lan-permission-head">
+          <div class="lan-permission-title">
+            <span class="lan-permission-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M4.5 9.5a10.5 10.5 0 0 1 15 0M7.4 12.5a6.4 6.4 0 0 1 9.2 0M10.3 15.5a2.3 2.3 0 0 1 3.4 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+                <circle cx="12" cy="19" r="1.15" fill="currentColor" />
+              </svg>
+            </span>
+            <div>
+              <div class="section-kicker">LOCAL NETWORK</div>
+              <h2 id="lanPermissionTitle">让同事能看到你</h2>
+            </div>
           </div>
           <button class="help-close" id="lanPermissionClose" type="button" aria-label="关闭局域网权限说明">
             <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -616,26 +629,53 @@ const info = window.__DUALDNS_ENV__;
             </svg>
           </button>
         </header>
-        <div class="help-body">
-          <p>
-            macOS 13 及以上会单独询问应用能否访问本地网络。若同事的 Mac 看不到其他人，
-            请先在对方电脑上点“发起局域网访问”。系统弹出授权时选择“允许”。
+        <div class="help-body lan-permission-body">
+          <p class="lan-permission-lead" id="lanPermissionLead">
+            局域网快传需要系统允许本应用访问本地网络。第一次使用时，macOS 通常会自动弹出授权。
           </p>
-          <p>
-            如果系统没有弹窗，或之前误点了“拒绝”，请打开
-            <strong>系统设置 → 隐私与安全性 → 本地网络</strong>，确认 DualDNS Browser 已打开。
-            修改后建议退出并重新打开本应用。
-          </p>
+
+          <div class="lan-permission-status" id="lanPermissionStatus">
+            <span class="lan-permission-status-dot" aria-hidden="true"></span>
+            <div>
+              <strong id="lanPermissionStatusTitle">等待授权</strong>
+              <span id="lanPermissionStatusText">如果同事看不到你，或你搜不到同事，按下面步骤检查。</span>
+            </div>
+          </div>
+
+          <ol class="lan-permission-steps">
+            <li>
+              <span class="lan-permission-step-number">1</span>
+              <div>
+                <strong>打开系统设置</strong>
+                <p id="lanPermissionStepSettings">进入“隐私与安全性 → 本地网络”。</p>
+              </div>
+            </li>
+            <li>
+              <span class="lan-permission-step-number">2</span>
+              <div>
+                <strong>打开 DualDNS Browser 的开关</strong>
+                <p>如果列表里没有本应用，先点“发起局域网访问”，再回到系统设置查看。</p>
+              </div>
+            </li>
+            <li>
+              <span class="lan-permission-step-number">3</span>
+              <div>
+                <strong>完全退出后重新打开</strong>
+                <p>从托盘菜单选择“退出并关闭浏览器”，再重新启动，局域网发现会恢复。</p>
+              </div>
+            </li>
+          </ol>
+
           <div class="lan-permission-actions">
-            <button class="update-check-button" id="lanPermissionProbe" type="button">
+            <button class="lan-permission-primary" id="lanPermissionProbe" type="button">
               发起局域网访问
             </button>
-            <button class="text-button" id="lanPermissionSettings" type="button">
+            <button class="lan-permission-secondary" id="lanPermissionSettings" type="button">
               打开系统设置
             </button>
           </div>
-          <p class="lan-hint" id="lanPermissionResult">
-            同一台 Mac 重新安装应用时，系统通常不会再次弹窗，因为之前的授权记录可能仍然保留。
+          <p class="lan-permission-result" id="lanPermissionResult" role="status" aria-live="polite">
+            重新安装应用时，系统通常不会再次弹窗，因为之前的授权记录可能仍然保留。
           </p>
         </div>
         <footer class="help-foot">
@@ -677,7 +717,7 @@ const info = window.__DUALDNS_ENV__;
           <div class="update-toolbar">
             <div class="update-current">
               <span class="update-label">当前版本</span>
-              <strong id="updateCurrentVersion">v1.2.1</strong>
+              <strong id="updateCurrentVersion">v1.2.2</strong>
             </div>
             <label class="update-source" for="updateSource">
               <span class="update-label">更新源</span>
@@ -717,7 +757,7 @@ const info = window.__DUALDNS_ENV__;
             <div class="update-result-head">
               <div>
                 <span class="update-label">最新版本</span>
-                <strong id="updateLatest">v1.2.1</strong>
+                <strong id="updateLatest">v1.2.2</strong>
               </div>
               <span class="update-badge" id="updateBadge">有新版本</span>
             </div>

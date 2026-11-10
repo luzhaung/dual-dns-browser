@@ -100,6 +100,11 @@ const lanPermissionDialog = lanPermissionModal.querySelector(".lan-permission-di
 const lanPermissionProbe = document.getElementById("lanPermissionProbe");
 const lanPermissionSettings = document.getElementById("lanPermissionSettings");
 const lanPermissionResult = document.getElementById("lanPermissionResult");
+const lanPermissionLead = document.getElementById("lanPermissionLead");
+const lanPermissionStepSettings = document.getElementById("lanPermissionStepSettings");
+const lanPermissionStatus = document.getElementById("lanPermissionStatus");
+const lanPermissionStatusTitle = document.getElementById("lanPermissionStatusTitle");
+const lanPermissionStatusText = document.getElementById("lanPermissionStatusText");
 const lanDropOverlay = document.getElementById("lanDropOverlay");
 const lanDropTitle = document.getElementById("lanDropTitle");
 const lanDropHint = document.getElementById("lanDropHint");
@@ -128,7 +133,7 @@ let updateBusy = false;
 let updateInstallBusy = false;
 let updateInstallLink = null;
 let updateSource = readStorage("dualdns.updateSource", "auto");
-let currentVersion = "1.2.1";
+let currentVersion = "1.2.2";
 let currentPlatformLabel = "";
 let dismissedUpdate = readStorage("dualdns.dismissedUpdate", "");
 let currentView = "browser";
@@ -144,6 +149,10 @@ let lanAttentionPrimed = false;
 let lanAttentionCount = 0;
 let lanMessageSignature = "";
 let lanPermissionReturnFocus = null;
+let lanNotificationPrimed = false;
+let lanNotificationUnavailable = false;
+let lanKnownMessageIds = new Set();
+let lanKnownIncomingIds = new Set();
 
 function readStorage(key, fallback) {
   try {
@@ -1011,6 +1020,8 @@ function renderLanMessages(messages) {
   if (signature === lanMessageSignature) return;
   const nearBottom =
     lanMessages.scrollHeight - lanMessages.scrollTop - lanMessages.clientHeight < 64;
+  const lastMessage = visible[visible.length - 1];
+  const shouldStick = nearBottom || !lanMessageSignature || lastMessage?.direction === "out";
   lanMessageSignature = signature;
   lanMessages.textContent = "";
 
@@ -1043,7 +1054,7 @@ function renderLanMessages(messages) {
     item.append(head, lanElement("div", "lan-message-body", message.text || ""));
     lanMessages.appendChild(item);
   });
-  if (nearBottom) lanMessages.scrollTop = lanMessages.scrollHeight;
+  if (shouldStick) lanMessages.scrollTop = lanMessages.scrollHeight;
 }
 
 function renderLanFiles(incoming, outgoing) {
@@ -1115,6 +1126,55 @@ function renderLanFiles(incoming, outgoing) {
   });
 }
 
+function truncateLanText(text, limit) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  return value.length > limit ? `${value.slice(0, limit)}…` : value;
+}
+
+function sendLanSystemNotification(title, body) {
+  if (!invoke || lanNotificationUnavailable) return;
+  invoke("notify_lan_event", { title, body }).catch(() => {
+    lanNotificationUnavailable = true;
+  });
+}
+
+function notifyNewLanEvents(data) {
+  const messages = Array.isArray(data.messages) ? data.messages : [];
+  const incoming = Array.isArray(data.incoming) ? data.incoming : [];
+  const firstSnapshot = !lanNotificationPrimed;
+  const nextMessageIds = new Set();
+  const nextIncomingIds = new Set();
+
+  messages.forEach((message) => {
+    if (!message?.id) return;
+    nextMessageIds.add(message.id);
+    if (lanKnownMessageIds.has(message.id)) return;
+    if (!firstSnapshot && message.direction === "in") {
+      const text = truncateLanText(message.text, 90);
+      sendLanSystemNotification(
+        "收到新的局域网消息",
+        `${message.peerName || "同事"}：${text || "（空消息）"}`,
+      );
+    }
+  });
+
+  incoming.forEach((item) => {
+    if (!item?.id) return;
+    nextIncomingIds.add(item.id);
+    if (lanKnownIncomingIds.has(item.id) || firstSnapshot) return;
+    if (item.status === "pending") {
+      sendLanSystemNotification(
+        "收到新的局域网文件",
+        `${item.fromName || "同事"} 发来 ${item.fileName || "未命名文件"} · ${formatBytes(item.size)}`,
+      );
+    }
+  });
+
+  lanKnownMessageIds = nextMessageIds;
+  lanKnownIncomingIds = nextIncomingIds;
+  lanNotificationPrimed = true;
+}
+
 function renderLanSnapshot(data) {
   lanSnapshotData = data;
   const self = data.self || {};
@@ -1141,6 +1201,7 @@ function renderLanSnapshot(data) {
   renderLanMessages(Array.isArray(data.messages) ? data.messages : []);
   renderLanFiles(data.incoming, data.outgoing);
   syncLanAttention(data);
+  notifyNewLanEvents(data);
 }
 
 function renderLanFailure(message) {
@@ -1159,21 +1220,46 @@ function renderLanFailure(message) {
   lanDiscoveryHint.textContent = message;
 }
 
-async function refreshLan({ silent = false } = {}) {
-  if (lanRefreshing) return;
+async function refreshLan({ silent = false, manual = false } = {}) {
+  if (lanRefreshing) {
+    if (manual) showToast("正在刷新，请稍候…", "info");
+    return;
+  }
   if (!invoke) {
     renderLanFailure("当前为界面预览模式，桌面应用中才能使用局域网快传。");
+    if (manual) showToast("当前为界面预览模式，桌面应用中才能刷新", "error");
     return;
   }
   lanRefreshing = true;
+  let succeeded = false;
+  if (manual) {
+    lanRefreshBtn.disabled = true;
+    lanRefreshBtn.textContent = "刷新中…";
+    lanRefreshBtn.setAttribute("aria-busy", "true");
+  }
   try {
     const data = await invoke("lan_snapshot");
     renderLanSnapshot(data);
+    succeeded = true;
   } catch (error) {
     renderLanFailure(friendlyError(error));
     if (!silent) showToast(friendlyError(error), "error");
   } finally {
     lanRefreshing = false;
+    if (manual) {
+      lanRefreshBtn.textContent = "刷新";
+      lanRefreshBtn.disabled = lanActionBusy;
+      lanRefreshBtn.removeAttribute("aria-busy");
+      if (succeeded) {
+        const time = new Date().toLocaleTimeString("zh-CN", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        });
+        showToast(`已刷新 · ${time}`, "success");
+      }
+    }
   }
 }
 
@@ -1319,6 +1405,16 @@ async function handleLanDrop(paths) {
 
 function openLanPermission() {
   lanPermissionReturnFocus = document.activeElement;
+  applyLanPermissionPlatform();
+  setLanPermissionState(
+    "",
+    "等待授权",
+    "如果同事看不到你，或你搜不到同事，按下面步骤检查。",
+  );
+  setLanPermissionResult(
+    "",
+    "重新安装应用时，系统通常不会再次弹窗，因为之前的授权记录可能仍然保留。",
+  );
   lanPermissionModal.hidden = false;
   syncModalLock();
   window.requestAnimationFrame(() => lanPermissionDialog.focus());
@@ -1333,33 +1429,99 @@ function closeLanPermission() {
   }
 }
 
-async function probeLanNetworkAccess() {
-  if (!invoke) {
-    lanPermissionResult.textContent = "当前为界面预览模式，桌面应用中才能发起局域网访问。";
+function isWindowsPlatform() {
+  return document.documentElement.dataset.platform === "windows";
+}
+
+function applyLanPermissionPlatform() {
+  if (isWindowsPlatform()) {
+    lanPermissionLead.textContent =
+      "Windows 首次运行局域网快传时，防火墙可能会拦截设备发现。允许应用访问专用网络后，同事之间才能互相看到。";
+    lanPermissionStepSettings.textContent = "打开 Windows 防火墙设置。";
+    lanPermissionSettings.textContent = "打开防火墙设置";
+    lanPermissionProbe.textContent = "发起局域网访问";
     return;
   }
+  lanPermissionLead.textContent =
+    "局域网快传需要系统允许本应用访问本地网络。第一次使用时，macOS 通常会自动弹出授权。";
+  lanPermissionStepSettings.textContent = "进入“隐私与安全性 → 本地网络”。";
+  lanPermissionSettings.textContent = "打开系统设置";
+  lanPermissionProbe.textContent = "发起局域网访问";
+}
+
+function setLanPermissionState(kind, title, text) {
+  lanPermissionStatus.classList.toggle("success", kind === "success");
+  lanPermissionStatus.classList.toggle("error", kind === "error");
+  lanPermissionStatusTitle.textContent = title;
+  lanPermissionStatusText.textContent = text;
+}
+
+function setLanPermissionResult(kind, message) {
+  lanPermissionResult.className = `lan-permission-result${kind ? ` ${kind}` : ""}`;
+  lanPermissionResult.textContent = message;
+}
+
+async function probeLanNetworkAccess() {
+  if (!invoke) {
+    setLanPermissionState("error", "界面预览模式", "请在桌面应用中发起局域网访问。");
+    setLanPermissionResult("error", "当前为界面预览模式，桌面应用中才能发起局域网访问。");
+    return;
+  }
+  const peers = [
+    lanSnapshotData?.self?.ip,
+    ...(Array.isArray(lanSnapshotData?.peers) ? lanSnapshotData.peers.map((peer) => peer.ip) : []),
+  ].filter(Boolean);
+  const ip = lanSnapshotData?.self?.ip || null;
+  const label = lanPermissionProbe.textContent;
   lanPermissionProbe.disabled = true;
-  lanPermissionResult.textContent = "正在发起局域网访问…如果系统弹出授权，请选择“允许”。";
+  lanPermissionSettings.disabled = true;
+  lanPermissionProbe.textContent = "正在探测…";
+  setLanPermissionState("loading", "正在发起访问", "正在探测本机与同事的局域网地址，请稍候。");
+  setLanPermissionResult("loading", "如果系统弹出授权，请选择“允许”。");
   try {
-    const ip = lanSnapshotData?.self?.ip || null;
-    await invoke("lan_probe_network_access", { ip });
-    lanPermissionResult.textContent =
-      "已发起访问。若没有看到授权弹窗，请点“打开系统设置”，确认 DualDNS Browser 的本地网络开关已打开。";
+    const result = await invoke("lan_probe_network_access", { ip, peers });
+    setLanPermissionState("success", "已发起访问", result?.message || "已完成局域网探测。");
+    setLanPermissionResult(
+      "success",
+      isWindowsPlatform()
+        ? `${result?.message || "已完成局域网探测"}。如果同事仍看不到你，请点“打开防火墙设置”，允许 DualDNS Browser 通过专用网络。`
+        : `${result?.message || "已完成局域网探测"}。如果系统没有弹出授权，请点“打开系统设置”，确认“本地网络”中的开关已打开。`,
+    );
+    showToast(result?.message || "已发起局域网访问", "success");
   } catch (error) {
-    lanPermissionResult.textContent = friendlyError(error);
+    setLanPermissionState("error", "发起失败", "请检查网络连接后重试。");
+    setLanPermissionResult("error", friendlyError(error));
+    showToast(friendlyError(error), "error");
   } finally {
     lanPermissionProbe.disabled = false;
+    lanPermissionSettings.disabled = false;
+    lanPermissionProbe.textContent = label;
   }
 }
 
 async function openLanPrivacySettings() {
-  if (!invoke) return;
+  if (!invoke) {
+    setLanPermissionResult("error", "当前为界面预览模式，桌面应用中才能打开系统设置。");
+    return;
+  }
+  const label = lanPermissionSettings.textContent;
+  lanPermissionSettings.disabled = true;
+  lanPermissionSettings.textContent = "正在打开…";
   try {
-    await invoke("open_lan_privacy_settings");
-    lanPermissionResult.textContent =
-      "已打开系统设置。请到“隐私与安全性 → 本地网络”中允许 DualDNS Browser，然后退出并重新打开应用。";
+    const message = await invoke("open_lan_privacy_settings");
+    setLanPermissionState(
+      "success",
+      isWindowsPlatform() ? "已打开防火墙设置" : "已打开系统设置",
+      message || "请按提示完成授权。",
+    );
+    setLanPermissionResult("success", message || "请按提示完成授权。");
   } catch (error) {
-    lanPermissionResult.textContent = friendlyError(error);
+    setLanPermissionState("error", "无法打开设置", "请手动打开系统设置。");
+    setLanPermissionResult("error", friendlyError(error));
+    showToast(friendlyError(error), "error");
+  } finally {
+    lanPermissionSettings.disabled = false;
+    lanPermissionSettings.textContent = label;
   }
 }
 
@@ -1610,7 +1772,7 @@ lanSelfName.addEventListener("keydown", (event) => {
     endLanRename(true);
   }
 });
-lanRefreshBtn.addEventListener("click", () => refreshLan({ silent: false }));
+lanRefreshBtn.addEventListener("click", () => refreshLan({ silent: false, manual: true }));
 lanPermissionBtn.addEventListener("click", openLanPermission);
 lanAddBtn.addEventListener("click", addLanPeer);
 lanAddIp.addEventListener("keydown", (event) => {

@@ -1,21 +1,21 @@
 {
-  "version": "1.2.1",
-  "published_at": "2026-11-10T18:23:45.234Z",
-  "notes": "修复局域网快传的单向发现问题，并补充 macOS 本地网络权限入口。\n\n- 收到广播、消息或文件后主动向对方单播注册，改善广播不能跨网段时只有一方能看到对方的问题。\n- 局域网快传新增“局域网权限”入口，可主动发起局域网访问，并直接打开 macOS“隐私与安全性 → 本地网络”设置。\n- 新增 `NSLocalNetworkUsageDescription`，系统首次询问本地网络权限时会显示用途说明。\n- 消息区只显示当前选中电脑的会话，切换电脑时自动刷新，不再把不同电脑的消息混在一起。\n- 支持把文件直接拖进应用发送；已选择电脑时立即发送，只有一台在线电脑时自动选择。\n- macOS 重装通常会沿用已有授权记录，不保证再次弹窗；权限状态请以系统设置中的本地网络开关为准。\n- 局域网传输不经过云端，但使用本机 HTTP 协议，没有端到端加密，请只在可信网络使用。\n- 不改动原有内外网浏览器、DNS 配置、应用内更新和托盘行为。",
-  "release_page": "https://gitee.com/phpbest/dual-dns-browser/releases/tag/v1.2.1",
+  "version": "1.2.2",
+  "published_at": "2026-11-10T18:49:10.569Z",
+  "notes": "优化局域网快传的操作反馈和界面细节。\n\n- 刷新按钮新增“刷新中…”状态和完成提示，刷新成功后会显示具体时间。\n- 消息区改为固定高度、独立滚动，新消息自动滚到底部；向上查看历史消息时不会被强制拉回。\n- 收到新消息或新文件时发送系统通知，首次打开页面不会对历史记录重复提醒。\n- 重新设计“局域网权限”弹窗：增加状态卡、三步说明和探测结果，按钮不再被挤成竖排。\n- “发起局域网访问”会探测本机网段、已知同事和广播地址，并显示实际探测结果，不再点了没有反应。\n- macOS 的“打开系统设置”会说明部分系统版本停在隐私首页，需要向下滚动到“本地网络”。\n- Windows 的“局域网权限”改为打开防火墙设置，并可把应用加入专用网络允许列表。\n- 不改动原有内外网浏览器、DNS 配置、应用内更新和托盘行为。",
+  "release_page": "https://gitee.com/phpbest/dual-dns-browser/releases/tag/v1.2.2",
   "downloads": {
-    "macos-aarch64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.1/DualDNS-Browser-1.2.1-macOS-AppleSilicon.dmg",
-    "macos-x86_64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.1/DualDNS-Browser-1.2.1-macOS-Intel.dmg",
-    "windows-x86_64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.1/DualDNS-Browser-1.2.1-Windows-x64-Setup.exe"
+    "macos-aarch64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.2/DualDNS-Browser-1.2.2-macOS-AppleSilicon.dmg",
+    "macos-x86_64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.2/DualDNS-Browser-1.2.2-macOS-Intel.dmg",
+    "windows-x86_64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.2/DualDNS-Browser-1.2.2-Windows-x64-Setup.exe"
   },
   "checksums": {
-    "macos-aarch64": "37700a573cc9de44055c81e6fa9ef2fa6cf6aedf28c5eb04926f07c9cdc15645",
-    "macos-x86_64": "6fab34dfdaba042a1d670a56f7d94ed4e91a6a7ec518fcdd2d3e86de50490776",
-    "windows-x86_64": "552a5da01b1a7135993937abfcdf22af034af36db63cad19d3ce17f69a597e1f"
+    "macos-aarch64": "49c63ca3f6b41f3a8ca5a2109fe8973b45afe5b00f89b59c021b15ec1702b112",
+    "macos-x86_64": "b21ccbb172544519f09ccc6608eaec9fd73c5fcbe07216e8baf7028f0612e151",
+    "windows-x86_64": "b077b7fd9fe1e6f633b158b66d31a733ceb9f800c115ee67214b566a3c68224b"
   },
   "sizes": {
-    "macos-aarch64": 5761565,
-    "macos-x86_64": 6345955,
-    "windows-x86_64": 4391743
+    "macos-aarch64": 5857340,
+    "macos-x86_64": 6455676,
+    "windows-x86_64": 4463550
   }
 }

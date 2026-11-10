@@ -24,7 +24,7 @@
           title="检查更新"
         >
           <span class="version-dot" id="versionDot"></span>
-          <span id="versionLabel">v1.2.4</span>
+          <span id="versionLabel">v1.2.5</span>
           <svg class="version-refresh" viewBox="0 0 16 16" aria-hidden="true">
             <path
               d="M13 8a5 5 0 1 1-1.46-3.54M13 3v3.2H9.8"
@@ -364,7 +364,7 @@
               type="search"
               spellcheck="false"
               autocomplete="off"
-              placeholder="搜索电脑名称、IP 或系统"
+              placeholder="搜索备注、电脑名称、IP 或系统"
               aria-label="搜索在线同事"
             />
           </label>
@@ -388,16 +388,18 @@
         <section class="card lan-card">
           <div class="section-head">
             <div>
-              <div class="section-kicker">消息</div>
-              <h2>随手发条消息</h2>
+              <div class="section-kicker">消息与文件</div>
+              <h2 id="lanChatTitle">选择同事开始聊天</h2>
             </div>
-            <button class="text-button" id="lanClearMessages" type="button">清空全部记录</button>
+            <div class="lan-chat-actions">
+              <button class="text-button" id="lanOpenDownloads" type="button">打开接收目录</button>
+              <button class="text-button" id="lanClearMessages" type="button">清空全部记录</button>
+            </div>
           </div>
           <div class="lan-messages" id="lanMessages">
-            <div class="lan-empty">还没有消息。选择上面的同事后，在下面输入内容。</div>
+            <div class="lan-empty">选择上面的同事后，这里会显示你们的消息和文件。</div>
           </div>
           <div class="lan-composer">
-            <span class="lan-to" id="lanComposerTo">未选择同事</span>
             <input
               id="lanMessageInput"
               type="text"
@@ -406,26 +408,13 @@
               placeholder="输入消息，回车发送"
               aria-label="消息内容"
             />
+            <button class="lan-attach-btn" id="lanPickFiles" type="button" title="发送图片或文件" aria-label="发送图片或文件">
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M13.8 6.2 8.2 11.8a2.1 2.1 0 0 0 3 3l5.4-5.4a3.6 3.6 0 0 0-5.1-5.1L5.8 9.9a5 5 0 0 0 7.1 7.1l4.3-4.3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </button>
             <button class="lan-send-btn" id="lanSendMessage" type="button">发送</button>
           </div>
-        </section>
-
-        <section class="card lan-card" id="lanFileCard">
-          <div class="section-head">
-            <div>
-              <div class="section-kicker">文件</div>
-              <h2>传到对方电脑</h2>
-            </div>
-            <button class="text-button" id="lanOpenDownloads" type="button">打开接收目录</button>
-          </div>
-          <div class="lan-files" id="lanFiles">
-            <div class="lan-empty">收到的文件会先出现在这里，点“保存”后才进入下载目录。</div>
-          </div>
-          <div class="lan-send-file-row">
-            <span class="lan-to" id="lanFileTo">未选择同事</span>
-            <button class="lan-pick-btn" id="lanPickFiles" type="button">选择文件并发送</button>
-          </div>
-          <p class="lan-hint">文件先暂存到对方应用内，对方确认后才会保存。单个文件最大 2 GB。</p>
         </section>
       </section>
 
@@ -525,9 +514,12 @@ const info = window.__DUALDNS_ENV__;
             <ul class="help-list">
               <li>双方都需要打开 DualDNS Browser，并连接到同一个可互访的局域网。</li>
               <li>自动发现使用 UDP <code>18191</code>，消息和文件传输使用 TCP <code>18190</code>。Windows 首次询问防火墙权限时请选择允许“专用网络”。</li>
-              <li>在线同事列表固定高度并独立滚动。同事较多时，可以在上方搜索框按电脑名称、IP 或 macOS / Windows 快速筛选。</li>
+              <li>在线同事列表会随人数自动调整高度，最多显示约 5 台；同事更多时列表内部滚动。可以在上方搜索框按备注、电脑名称、IP 或 macOS / Windows 快速筛选。</li>
+              <li>点同事右侧的“备注”可以为对方起一个本机备注名。备注只保存在你的电脑上，不会修改对方名称；列表、搜索、聊天标题和通知都会优先显示备注名。</li>
+              <li>收到新消息或文件时，对应同事的名称旁会出现红色未读数字；打开该同事的聊天后自动清除。</li>
               <li>公司 Wi-Fi 开启 AP 隔离 / 客户端隔离时，设备之间无法互访，自动发现会失败；可以尝试让同事把 IP 发给你后手动添加。</li>
-              <li>点击同事后可以发消息或选择文件。收到的文件会先暂存，点“保存”后才会进入下载目录：macOS 为 <code>~/Downloads/DualDNS Transfers</code>，Windows 为 <code>%USERPROFILE%\Downloads\DualDNS Transfers</code>。</li>
+              <li>点击同事进入聊天后，消息和文件都在同一个时间线里。输入框右侧的回形针可以一次选择图片或文件发送，也可以直接把文件拖进窗口。</li>
+              <li>收到的文件会先暂存，点“保存”后才会进入下载目录：macOS 为 <code>~/Downloads/DualDNS Transfers</code>，Windows 为 <code>%USERPROFILE%\Downloads\DualDNS Transfers</code>。</li>
               <li>收到新消息或文件时，系统会弹出通知；如果收不到通知，请在系统设置中允许 DualDNS Browser 发送通知。</li>
               <li>不想被所有同事看到时，可以打开“隐身模式”，只勾选允许发现你的电脑。隐身期间未勾选的设备无法发现你，也不能给你发消息或传文件。</li>
               <li>想在自己的两台电脑之间互传：先让两台电脑正常发现对方，把对方加入隐身名单，再开启隐身。隐身期间不能手动添加新 IP，需要新增设备时先关闭隐身。</li>
@@ -799,6 +791,41 @@ const info = window.__DUALDNS_ENV__;
       </div>
     </div>
 
+    <div class="help-backdrop" id="lanNoteModal" hidden>
+      <section
+        class="help-dialog lan-note-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="lanNoteTitle"
+        tabindex="-1"
+      >
+        <header class="help-head">
+          <div>
+            <div class="section-kicker">PEER NOTE</div>
+            <h2 id="lanNoteTitle">设置同事备注</h2>
+          </div>
+          <button class="help-close" id="lanNoteClose" type="button" aria-label="关闭备注设置">
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="m5 5 10 10M15 5 5 15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+            </svg>
+          </button>
+        </header>
+        <div class="help-body lan-note-body">
+          <p class="lan-note-peer" id="lanNotePeerName">—</p>
+          <label class="lan-note-field" for="lanNoteInput">
+            <span>备注名</span>
+            <input id="lanNoteInput" type="text" maxlength="40" autocomplete="off" placeholder="例如：设计部小王" />
+          </label>
+          <p class="lan-hint">备注只保存在本机，用于列表和聊天标题显示，不会修改对方电脑名称。</p>
+          <div class="lan-privacy-actions">
+            <button class="lan-note-remove" id="lanNoteRemove" type="button">清除备注</button>
+            <button class="lan-privacy-cancel" id="lanNoteCancel" type="button">取消</button>
+            <button class="lan-privacy-save" id="lanNoteSave" type="button">保存备注</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
     <div class="help-backdrop" id="updateModal" hidden>
       <section
         class="help-dialog update-dialog"
@@ -823,7 +850,7 @@ const info = window.__DUALDNS_ENV__;
           <div class="update-toolbar">
             <div class="update-current">
               <span class="update-label">当前版本</span>
-              <strong id="updateCurrentVersion">v1.2.4</strong>
+              <strong id="updateCurrentVersion">v1.2.5</strong>
             </div>
             <label class="update-source" for="updateSource">
               <span class="update-label">更新源</span>
@@ -863,7 +890,7 @@ const info = window.__DUALDNS_ENV__;
             <div class="update-result-head">
               <div>
                 <span class="update-label">最新版本</span>
-                <strong id="updateLatest">v1.2.4</strong>
+                <strong id="updateLatest">v1.2.5</strong>
               </div>
               <span class="update-badge" id="updateBadge">有新版本</span>
             </div>

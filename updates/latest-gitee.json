@@ -1,21 +1,21 @@
 {
-  "version": "1.2.4",
-  "published_at": "2026-11-10T19:48:27.493Z",
-  "notes": "## v1.2.4\n\n修复局域网快传页的空白状态标签。\n\n- 修复未开启隐身模式时，“局域网快传”标题下出现一个空白小方块的问题。\n- 统一隐藏元素的显示规则，避免其他带 `hidden` 属性的控件被样式意外显示。\n- 不改动内外网浏览、DNS、更新、托盘和局域网传输逻辑。",
-  "release_page": "https://gitee.com/phpbest/dual-dns-browser/releases/tag/v1.2.4",
+  "version": "1.2.5",
+  "published_at": "2026-11-10T20:16:32.638Z",
+  "notes": "## v1.2.5\n\n优化局域网快传的同事管理和聊天体验。\n\n- 在线同事新增“备注”：备注只保存在本机，按设备 ID 关联，不修改对方名称。\n- 设置备注后，在线列表、搜索、聊天标题、拖拽提示、系统通知和隐身可见名单都会优先显示备注名；副标题保留真实机器名、IP 和系统。\n- 在线同事列表改为内容自适应，最多显示约 5 台，人数少时不再出现大片空白；人数多时列表内部滚动。\n- 消息和文件合并到同一时间线，删除了独立的文件区域。\n- 聊天输入框右侧新增回形针按钮，可直接选择图片或文件发送；仍然支持拖拽文件。\n- 聊天卡片顶部显示当前对象，设置备注后显示备注名，鼠标悬停可查看真实机器名。\n- 收到新消息或待接收文件时，对应同事名称旁显示红色未读数字；打开该同事的聊天后自动清除。\n- 修正备注弹窗底部按钮在有/无备注两种状态下的对齐。\n- 更新使用说明、帮助弹窗和 README。",
+  "release_page": "https://gitee.com/phpbest/dual-dns-browser/releases/tag/v1.2.5",
   "downloads": {
-    "macos-aarch64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.4/DualDNS-Browser-1.2.4-macOS-AppleSilicon.dmg",
-    "macos-x86_64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.4/DualDNS-Browser-1.2.4-macOS-Intel.dmg",
-    "windows-x86_64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.4/DualDNS-Browser-1.2.4-Windows-x64-Setup.exe"
+    "macos-aarch64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.5/DualDNS-Browser-1.2.5-macOS-AppleSilicon.dmg",
+    "macos-x86_64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.5/DualDNS-Browser-1.2.5-macOS-Intel.dmg",
+    "windows-x86_64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.5/DualDNS-Browser-1.2.5-Windows-x64-Setup.exe"
   },
   "checksums": {
-    "macos-aarch64": "0df625b55831c61415aea71c57d9819df32a08ad2073f13346badbd714efaf55",
-    "macos-x86_64": "d6ab68f807f8ca909c41449b28e271179774a582d27a9be7bbc1b6faffeed1f1",
-    "windows-x86_64": "8d07abbd276a1ae82b94fa2ce9ca163d64ac5d8561603a5fccf52d4264eb8ba9"
+    "macos-aarch64": "1c60c8669f250db932f6ca219abcc8227280b7788853063ed1f5a65d43b60b36",
+    "macos-x86_64": "2fe6e07223a051d6fb14c01c13416e83ca5d511a6cc4748c42dad67968d9377c",
+    "windows-x86_64": "e45a671e666d91da7744bd5b5e08a4245dbb144b89ada35718a2d50256d5b063"
   },
   "sizes": {
-    "macos-aarch64": 5869726,
-    "macos-x86_64": 6471301,
-    "windows-x86_64": 4476776
+    "macos-aarch64": 5873203,
+    "macos-x86_64": 6473291,
+    "windows-x86_64": 4478068
   }
 }

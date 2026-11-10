@@ -2225,6 +2225,23 @@ html[data-platform="windows"] .toast {
   margin-bottom: 14px;
 }
 
+.lan-card .section-head > div:first-child {
+  min-width: 0;
+}
+
+#lanChatTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lan-chat-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 14px;
+}
+
 .lan-count {
   margin-top: 3px;
   color: var(--ink-faint);
@@ -2245,8 +2262,8 @@ html[data-platform="windows"] .toast {
 
 .lan-peer-list {
   display: flex;
-  height: 318px;
-  min-height: 318px;
+  height: auto;
+  min-height: 0;
   max-height: 318px;
   flex-direction: column;
   gap: 7px;
@@ -2365,7 +2382,15 @@ html[data-platform="windows"] .toast {
   gap: 2px;
 }
 
+.lan-peer-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
 .lan-peer-main strong {
+  min-width: 0;
   overflow: hidden;
   font-size: 12.5px;
   font-weight: 650;
@@ -2373,12 +2398,28 @@ html[data-platform="windows"] .toast {
   white-space: nowrap;
 }
 
-.lan-peer-main span {
+.lan-peer-detail {
   overflow: hidden;
   color: var(--ink-faint);
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.lan-peer-unread {
+  display: inline-grid;
+  min-width: 18px;
+  height: 18px;
+  flex: none;
+  place-items: center;
+  padding: 0 5px;
+  border-radius: 999px;
+  color: #fff;
+  background: #d94b4b;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 2px 6px rgba(190, 51, 51, 0.22);
 }
 
 .lan-peer-status {
@@ -2421,6 +2462,11 @@ html[data-platform="windows"] .toast {
   color: var(--ink);
   border-color: rgba(37, 99, 235, 0.3);
   background: var(--internal-soft);
+}
+
+.lan-peer-actions .lan-peer-note-btn {
+  color: #5f6f88;
+  background: rgba(247, 249, 253, 0.9);
 }
 
 .lan-add {
@@ -2538,6 +2584,27 @@ html[data-platform="windows"] .toast {
   white-space: pre-wrap;
 }
 
+.lan-chat-file {
+  width: min(88%, 520px);
+  align-self: flex-start;
+  margin: 1px 0;
+}
+
+.lan-chat-file.out {
+  align-self: flex-end;
+  border-color: rgba(44, 98, 214, 0.14);
+  background: #f2f7ff;
+}
+
+.lan-chat-file.in .lan-file-icon {
+  color: #17754f;
+  background: #e9f8f1;
+}
+
+.lan-chat-file .lan-progress {
+  width: 100%;
+}
+
 .lan-composer {
   display: flex;
   align-items: center;
@@ -2572,6 +2639,36 @@ html[data-platform="windows"] .toast {
 
 .lan-send-btn:hover {
   opacity: 0.9;
+}
+
+.lan-attach-btn {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  place-items: center;
+  border: 1px solid rgba(19, 35, 60, 0.11);
+  border-radius: 9px;
+  color: #5f6f88;
+  background: #fff;
+  cursor: pointer;
+  transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+
+.lan-attach-btn svg {
+  width: 17px;
+  height: 17px;
+}
+
+.lan-attach-btn:hover {
+  color: #2c62d6;
+  border-color: rgba(37, 99, 235, 0.3);
+  background: var(--internal-soft);
+}
+
+.lan-attach-btn:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
 .lan-files {
@@ -3208,6 +3305,88 @@ html[data-platform="windows"] .toast {
 .lan-privacy-save:disabled {
   cursor: wait;
   opacity: 0.6;
+}
+
+.lan-note-dialog {
+  width: min(460px, calc(100vw - 36px));
+}
+
+.lan-note-peer {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid rgba(19, 35, 60, 0.08);
+  border-radius: 10px;
+  color: var(--ink-soft);
+  background: #f7f9fc;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.lan-note-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.lan-note-field > span {
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.lan-note-field input {
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid rgba(19, 35, 60, 0.12);
+  border-radius: 10px;
+  color: var(--ink);
+  background: #fff;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.lan-note-field input:focus {
+  border-color: rgba(47, 123, 255, 0.45);
+  box-shadow: 0 0 0 3px rgba(47, 123, 255, 0.10);
+}
+
+.lan-note-body .lan-privacy-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lan-note-body .lan-privacy-cancel,
+.lan-note-body .lan-privacy-save {
+  flex: 0 0 auto;
+  min-width: 104px;
+  padding: 0 18px;
+}
+
+.lan-note-body .lan-privacy-cancel {
+  margin-left: auto;
+}
+
+.lan-note-remove {
+  height: 40px;
+  margin-right: auto;
+  padding: 0 4px;
+  border: 0;
+  color: #a14a4a;
+  background: transparent;
+  font-size: 11px;
+  font-weight: 620;
+  cursor: pointer;
+}
+
+.lan-note-remove:hover {
+  color: #862f2f;
+}
+
+.lan-note-remove[hidden] {
+  display: none;
 }
 
 .lan-drop-overlay {

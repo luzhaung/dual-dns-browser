@@ -65,7 +65,11 @@ const path = require("path");
 const crypto = require("crypto");
 
 const [version, notesFile, updatesDir, distDir, ghRepo, giteeRepo] = process.argv.slice(2);
-const notes = fs.readFileSync(notesFile, "utf8").trim();
+const allNotes = fs.readFileSync(notesFile, "utf8");
+const marker = `## v${version}`;
+const start = allNotes.indexOf(marker);
+const end = start === -1 ? -1 : allNotes.indexOf("\n## v", start + marker.length);
+const notes = (start === -1 ? allNotes : allNotes.slice(start, end === -1 ? undefined : end)).trim();
 const apple = `DualDNS-Browser-${version}-macOS-AppleSilicon.dmg`;
 const intel = `DualDNS-Browser-${version}-macOS-Intel.dmg`;
 const setup = `DualDNS-Browser-${version}-Windows-x64-Setup.exe`;

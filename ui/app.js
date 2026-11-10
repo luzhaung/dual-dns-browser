@@ -82,6 +82,7 @@ const lanPrivacyState = document.getElementById("lanPrivacyState");
 const lanPermissionBtn = document.getElementById("lanPermissionBtn");
 const lanRenameBtn = document.getElementById("lanRenameBtn");
 const lanRefreshBtn = document.getElementById("lanRefreshBtn");
+const lanChatTitle = document.getElementById("lanChatTitle");
 const lanPeerCount = document.getElementById("lanPeerCount");
 const lanPeerList = document.getElementById("lanPeerList");
 const lanPeerSearch = document.getElementById("lanPeerSearch");
@@ -90,12 +91,9 @@ const lanAddBtn = document.getElementById("lanAddBtn");
 const lanDiscoveryHint = document.getElementById("lanDiscoveryHint");
 const lanMessages = document.getElementById("lanMessages");
 const lanClearMessages = document.getElementById("lanClearMessages");
-const lanComposerTo = document.getElementById("lanComposerTo");
 const lanMessageInput = document.getElementById("lanMessageInput");
 const lanSendMessage = document.getElementById("lanSendMessage");
-const lanFiles = document.getElementById("lanFiles");
 const lanOpenDownloads = document.getElementById("lanOpenDownloads");
-const lanFileTo = document.getElementById("lanFileTo");
 const lanPickFiles = document.getElementById("lanPickFiles");
 const lanPermissionModal = document.getElementById("lanPermissionModal");
 const lanPermissionClose = document.getElementById("lanPermissionClose");
@@ -122,6 +120,14 @@ const lanPrivacySave = document.getElementById("lanPrivacySave");
 const lanDropOverlay = document.getElementById("lanDropOverlay");
 const lanDropTitle = document.getElementById("lanDropTitle");
 const lanDropHint = document.getElementById("lanDropHint");
+const lanNoteModal = document.getElementById("lanNoteModal");
+const lanNoteDialog = lanNoteModal.querySelector(".lan-note-dialog");
+const lanNoteClose = document.getElementById("lanNoteClose");
+const lanNotePeerName = document.getElementById("lanNotePeerName");
+const lanNoteInput = document.getElementById("lanNoteInput");
+const lanNoteRemove = document.getElementById("lanNoteRemove");
+const lanNoteCancel = document.getElementById("lanNoteCancel");
+const lanNoteSave = document.getElementById("lanNoteSave");
 
 const DEFAULTS = {
   internal_dns: "192.168.2.19",
@@ -134,6 +140,7 @@ const DEFAULTS = {
 const AUTO = "__auto__";
 const CUSTOM = "__custom__";
 const LAN_PORT_FALLBACK = 18190;
+const LAN_NOTES_KEY = ["dualdns", "lan", "peer", "notes", "v1"].join(".");
 
 let savedSettings = { ...DEFAULTS };
 let browserOptions = [];
@@ -147,7 +154,7 @@ let updateBusy = false;
 let updateInstallBusy = false;
 let updateInstallLink = null;
 let updateSource = readStorage("dualdns.updateSource", "auto");
-let currentVersion = "1.2.4";
+let currentVersion = "1.2.5";
 let currentPlatformLabel = "";
 let dismissedUpdate = readStorage("dualdns.dismissedUpdate", "");
 let currentView = "browser";
@@ -167,12 +174,16 @@ let lanPrivacySaving = false;
 let lanSeenAttention = new Set();
 let lanAttentionPrimed = false;
 let lanAttentionCount = 0;
+let lanPeerUnread = new Map();
 let lanMessageSignature = "";
 let lanPermissionReturnFocus = null;
+let lanNoteReturnFocus = null;
+let lanNotePeerId = "";
 let lanNotificationPrimed = false;
 let lanNotificationUnavailable = false;
 let lanKnownMessageIds = new Set();
 let lanKnownIncomingIds = new Set();
+let lanPeerNotes = readLanNotes();
 
 function readStorage(key, fallback) {
   try {
@@ -188,6 +199,41 @@ function writeStorage(key, value) {
   } catch {
     // Storage can be unavailable in some WebView modes; the app still works.
   }
+}
+
+function readLanNotes() {
+  try {
+    const parsed = JSON.parse(readStorage(LAN_NOTES_KEY, "{}"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .filter(([key, value]) => key && typeof value === "string" && value.trim())
+        .map(([key, value]) => [key, value.trim().slice(0, 40)]),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function saveLanNotes() {
+  writeStorage(LAN_NOTES_KEY, JSON.stringify(lanPeerNotes));
+}
+
+function lanPeerNote(peerId) {
+  return peerId ? lanPeerNotes[peerId] || "" : "";
+}
+
+function lanPeerLabel(peer) {
+  if (!peer) return "";
+  return lanPeerNote(peer.id) || peer.name || "未命名电脑";
+}
+
+function lanPeerLabelById(peerId, fallbackName) {
+  return lanPeerNote(peerId) || fallbackName || "同事";
+}
+
+function lanPeerUnreadCount(peerId) {
+  return peerId ? lanPeerUnread.get(peerId) || 0 : 0;
 }
 
 function normalizeHex(value) {
@@ -328,7 +374,8 @@ function syncModalLock() {
     !helpModal.hidden
       || !updateModal.hidden
       || !lanPermissionModal.hidden
-      || !lanPrivacyModal.hidden,
+      || !lanPrivacyModal.hidden
+      || !lanNoteModal.hidden,
   );
 }
 
@@ -343,6 +390,7 @@ function trapModalFocus(event, modal, dialog) {
     if (modal === updateModal) closeUpdates();
     else if (modal === lanPermissionModal) closeLanPermission();
     else if (modal === lanPrivacyModal) closeLanPrivacy();
+    else if (modal === lanNoteModal) closeLanNote();
     else closeHelp();
     return;
   }
@@ -888,6 +936,7 @@ function lanPeerMatches(peer, query) {
   if (!term) return true;
   return [
     peer?.name,
+    lanPeerNote(peer?.id),
     peer?.ip,
     peer?.platform,
     lanPlatformLabel(peer?.platform),
@@ -921,22 +970,30 @@ function updateLanAttention() {
 }
 
 function syncLanAttention(data) {
-  const ids = [];
+  const entries = [];
   (Array.isArray(data.messages) ? data.messages : [])
     .filter((message) => message.direction === "in")
-    .forEach((message) => ids.push(`message:${message.id}`));
+    .forEach((message) => entries.push({
+      key: `message:${message.id}`,
+      peerId: message.peerId,
+    }));
   (Array.isArray(data.incoming) ? data.incoming : [])
-    .forEach((item) => ids.push(`file:${item.id}`));
+    .forEach((item) => entries.push({
+      key: `file:${item.id}`,
+      peerId: item.fromId,
+    }));
 
   if (!lanAttentionPrimed) {
-    ids.forEach((id) => lanSeenAttention.add(id));
+    entries.forEach(({ key }) => lanSeenAttention.add(key));
     lanAttentionPrimed = true;
   } else {
     let fresh = 0;
-    ids.forEach((id) => {
-      if (!lanSeenAttention.has(id)) {
-        lanSeenAttention.add(id);
-        fresh += 1;
+    entries.forEach(({ key, peerId }) => {
+      if (lanSeenAttention.has(key)) return;
+      lanSeenAttention.add(key);
+      fresh += 1;
+      if (peerId && !(currentView === "lan" && peerId === lanSelectedPeerId)) {
+        lanPeerUnread.set(peerId, lanPeerUnreadCount(peerId) + 1);
       }
     });
     if (fresh > 0 && currentView !== "lan") {
@@ -944,16 +1001,18 @@ function syncLanAttention(data) {
     }
   }
 
-  if (currentView === "lan") lanAttentionCount = 0;
+  if (currentView === "lan") {
+    lanAttentionCount = 0;
+    if (lanSelectedPeerId) lanPeerUnread.delete(lanSelectedPeerId);
+  }
   updateLanAttention();
 }
 
 function renderLanTargets() {
   const peer = selectedLanPeer();
-  const target = peer ? `发给 ${peer.name}` : "未选择同事";
   const privateMode = Boolean(lanSnapshotData?.privacy?.enabled);
-  lanComposerTo.textContent = target;
-  lanFileTo.textContent = target;
+  lanChatTitle.textContent = peer ? `和 ${lanPeerLabel(peer)} 聊天` : "选择同事开始聊天";
+  lanChatTitle.title = peer?.name && lanPeerNote(peer.id) ? `电脑名称：${peer.name}` : "";
   lanSendMessage.disabled = !peer || lanActionBusy;
   lanPickFiles.disabled = !peer || lanActionBusy;
   lanAddIp.disabled = privateMode;
@@ -966,9 +1025,14 @@ function renderLanTargets() {
 function selectLanPeer(peerId, options = {}) {
   if (!lanSnapshotData?.peers?.some((peer) => peer.id === peerId)) return;
   lanSelectedPeerId = peerId;
+  lanPeerUnread.delete(peerId);
   renderLanPeers(lanSnapshotData.peers);
   lanMessageSignature = "";
-  renderLanMessages(Array.isArray(lanSnapshotData.messages) ? lanSnapshotData.messages : []);
+  renderLanMessages(
+    Array.isArray(lanSnapshotData.messages) ? lanSnapshotData.messages : [],
+    lanSnapshotData.incoming,
+    lanSnapshotData.outgoing,
+  );
   renderLanTargets();
   if (options.focusMessage) {
     lanMessageInput.focus();
@@ -1020,17 +1084,34 @@ function renderLanPeers(peers) {
     row.setAttribute("role", "button");
     row.setAttribute("aria-pressed", selected ? "true" : "false");
 
+    const label = lanPeerLabel(peer);
+    const note = lanPeerNote(peer.id);
     const avatar = lanElement(
       "span",
       "lan-peer-avatar",
-      Array.from(String(peer.name || "同事"))[0] || "同",
+      Array.from(String(label || "同事"))[0] || "同",
     );
     const main = lanElement("span", "lan-peer-main");
-    main.appendChild(lanElement("strong", "", peer.name || "未命名电脑"));
-    const detail = [`${peer.ip || "IP 未知"}:${peer.port || LAN_PORT_FALLBACK}`];
+    const title = lanElement("span", "lan-peer-title");
+    title.appendChild(lanElement("strong", "", label));
+    const unread = lanPeerUnreadCount(peer.id);
+    if (unread > 0) {
+      const badge = lanElement(
+        "span",
+        "lan-peer-unread",
+        unread > 99 ? "99+" : String(unread),
+      );
+      badge.title = `${unread} 条未读消息或文件`;
+      badge.setAttribute("aria-label", badge.title);
+      title.appendChild(badge);
+    }
+    main.appendChild(title);
+    const detail = [];
+    if (note) detail.push(peer.name || "未命名电脑");
+    detail.push(`${peer.ip || "IP 未知"}:${peer.port || LAN_PORT_FALLBACK}`);
     if (peer.platform) detail.push(lanPlatformLabel(peer.platform));
     if (peer.manual) detail.push("手动添加");
-    main.appendChild(lanElement("span", "", detail.join(" · ")));
+    main.appendChild(lanElement("span", "lan-peer-detail", detail.join(" · ")));
 
     const status = lanElement(
       "span",
@@ -1038,6 +1119,13 @@ function renderLanPeers(peers) {
       peer.online ? "在线" : "离线",
     );
     const actions = lanElement("span", "lan-peer-actions");
+    const noteBtn = lanElement("button", "lan-peer-note-btn", note ? "改备注" : "备注");
+    noteBtn.type = "button";
+    noteBtn.title = note ? `当前备注：${note}` : "给这台电脑设置备注";
+    noteBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openLanNote(peer);
+    });
     const messageBtn = lanElement("button", "", "发消息");
     messageBtn.type = "button";
     messageBtn.addEventListener("click", (event) => {
@@ -1051,7 +1139,7 @@ function renderLanPeers(peers) {
       event.stopPropagation();
       selectLanPeer(peer.id, { sendFiles: true });
     });
-    actions.append(messageBtn, fileBtn);
+    actions.append(noteBtn, messageBtn, fileBtn);
 
     row.append(avatar, main, status, actions);
     row.addEventListener("click", () => selectLanPeer(peer.id));
@@ -1140,8 +1228,11 @@ function renderLanPrivacyList() {
     });
 
     const main = lanElement("span", "lan-privacy-device-main");
-    main.appendChild(lanElement("strong", "", peer.name || "未命名电脑"));
-    const detail = [peer.ip || "IP 未知"];
+    const note = lanPeerNote(peer.id);
+    main.appendChild(lanElement("strong", "", lanPeerLabel(peer)));
+    const detail = [];
+    if (note) detail.push(peer.name || "未命名电脑");
+    detail.push(peer.ip || "IP 未知");
     if (peer.platform) detail.push(lanPlatformLabel(peer.platform));
     main.appendChild(lanElement("span", "", detail.join(" · ")));
     const status = lanElement(
@@ -1152,6 +1243,80 @@ function renderLanPrivacyList() {
     row.append(input, main, status);
     lanPrivacyList.appendChild(row);
   });
+}
+
+function refreshLanPeerViews() {
+  renderLanPeers(Array.isArray(lanSnapshotData?.peers) ? lanSnapshotData.peers : []);
+  lanMessageSignature = "";
+  renderLanMessages(
+    Array.isArray(lanSnapshotData?.messages) ? lanSnapshotData.messages : [],
+    lanSnapshotData?.incoming,
+    lanSnapshotData?.outgoing,
+  );
+  renderLanTargets();
+  if (!lanPrivacyModal.hidden) renderLanPrivacyList();
+}
+
+function openLanNote(peer) {
+  if (!peer || !lanNoteModal.hidden) return;
+  lanNotePeerId = peer.id;
+  lanNoteReturnFocus = document.activeElement;
+  lanNotePeerName.textContent = peer.name || "未命名电脑";
+  const note = lanPeerNote(peer.id);
+  lanNoteInput.value = note;
+  lanNoteRemove.hidden = !note;
+  lanNoteModal.hidden = false;
+  syncModalLock();
+  window.requestAnimationFrame(() => {
+    lanNoteDialog.focus();
+    lanNoteInput.focus();
+    lanNoteInput.select();
+  });
+}
+
+function closeLanNote() {
+  if (lanNoteModal.hidden) return;
+  lanNoteModal.hidden = true;
+  syncModalLock();
+  if (lanNoteReturnFocus instanceof HTMLElement) {
+    lanNoteReturnFocus.focus();
+  }
+  lanNoteReturnFocus = null;
+  lanNotePeerId = "";
+}
+
+function persistLanNote(peerId, rawNote) {
+  const note = String(rawNote || "").trim().slice(0, 40);
+  if (note) {
+    lanPeerNotes[peerId] = note;
+  } else {
+    delete lanPeerNotes[peerId];
+  }
+  saveLanNotes();
+}
+
+function saveLanNote() {
+  if (!lanNotePeerId) return;
+  const peer = (lanSnapshotData?.peers || []).find((item) => item.id === lanNotePeerId);
+  const wasSet = Boolean(lanPeerNote(lanNotePeerId));
+  persistLanNote(lanNotePeerId, lanNoteInput.value);
+  const isSet = Boolean(lanPeerNote(lanNotePeerId));
+  refreshLanPeerViews();
+  closeLanNote();
+  showToast(
+    isSet
+      ? `备注已保存：${lanPeerNote(peer?.id || "")}`
+      : wasSet ? "备注已清除" : "未填写备注",
+    "success",
+  );
+}
+
+function removeLanNote() {
+  if (!lanNotePeerId) return;
+  persistLanNote(lanNotePeerId, "");
+  refreshLanPeerViews();
+  closeLanNote();
+  showToast("备注已清除", "success");
 }
 
 function openLanPrivacy() {
@@ -1240,17 +1405,97 @@ async function saveLanPrivacy() {
   }
 }
 
-function renderLanMessages(messages) {
+function lanFileStatusText(item) {
+  if (item.status === "done") return "已发送";
+  if (item.status === "error") return "发送失败";
+  const percent = item.size > 0
+    ? Math.max(0, Math.min(100, Math.round((Number(item.done) / Number(item.size)) * 100)))
+    : 0;
+  return `发送中 ${percent}%`;
+}
+
+function renderLanFileMessage(item, direction) {
+  const outgoing = direction === "out";
+  const row = lanElement("article", `lan-file lan-chat-file ${outgoing ? "out" : "in"}`);
+  const icon = lanElement("span", "lan-file-icon", outgoing ? "↑" : "↓");
+  const main = lanElement("span", "lan-file-main");
+  main.appendChild(lanElement("span", "lan-file-name", item.fileName || "未命名文件"));
+
+  if (outgoing) {
+    const statusText = lanFileStatusText(item);
+    main.appendChild(lanElement(
+      "span",
+      "lan-file-meta",
+      `发给 ${lanPeerLabelById(item.peerId, item.peerName)} · ${statusText} · ${formatBytes(item.size)}`,
+    ));
+    if (item.status === "sending") {
+      const percent = item.size > 0
+        ? Math.max(0, Math.min(100, Math.round((Number(item.done) / Number(item.size)) * 100)))
+        : 0;
+      const progress = lanElement("span", "lan-progress");
+      const bar = lanElement("span");
+      bar.style.width = `${percent}%`;
+      progress.appendChild(bar);
+      main.appendChild(progress);
+    } else if (item.status === "error" && item.error) {
+      main.appendChild(lanElement("span", "lan-file-meta", item.error));
+    }
+    row.append(icon, main);
+    return row;
+  }
+
+  const source = lanPeerLabelById(item.fromId, item.fromName);
+  const ip = item.fromIp ? ` · ${item.fromIp}` : "";
+  main.appendChild(lanElement(
+    "span",
+    "lan-file-meta",
+    `${source}${ip} · ${formatBytes(item.size)} · ${formatLanTime(item.at)}`,
+  ));
+  const actions = lanElement("span", "lan-file-actions");
+  const accept = lanElement("button", "accept", "保存");
+  accept.type = "button";
+  accept.disabled = lanActionBusy;
+  accept.addEventListener("click", () => acceptLanFile(item.id, accept));
+  const discard = lanElement("button", "", "忽略");
+  discard.type = "button";
+  discard.disabled = lanActionBusy;
+  discard.addEventListener("click", () => discardLanFile(item.id, discard));
+  actions.append(accept, discard);
+  row.append(icon, main, actions);
+  return row;
+}
+
+function renderLanMessages(messages, incoming, outgoing) {
   const peer = selectedLanPeer();
-  const visible = peer
+  const visibleMessages = peer
     ? messages.filter((message) => message.peerId === peer.id)
     : [];
-  const signature = `${peer?.id || ""}:${visible.map((message) => `${message.id}:${message.at}`).join("|")}`;
+  const visibleIncoming = peer
+    ? (Array.isArray(incoming) ? incoming : []).filter((item) => item.fromId === peer.id)
+    : [];
+  const visibleOutgoing = peer
+    ? (Array.isArray(outgoing) ? outgoing : []).filter((item) => item.peerId === peer.id)
+    : [];
+  const signature = [
+    peer?.id || "",
+    visibleMessages.map((message) => `m:${message.id}:${message.at}`).join("|"),
+    visibleIncoming.map((item) => `i:${item.id}:${item.status}:${item.at}`).join("|"),
+    visibleOutgoing.map((item) => `o:${item.id}:${item.status}:${item.done}:${item.at}`).join("|"),
+  ].join(":");
   if (signature === lanMessageSignature) return;
   const nearBottom =
     lanMessages.scrollHeight - lanMessages.scrollTop - lanMessages.clientHeight < 64;
-  const lastMessage = visible[visible.length - 1];
-  const shouldStick = nearBottom || !lanMessageSignature || lastMessage?.direction === "out";
+  const timeline = [
+    ...visibleMessages.map((message) => ({ kind: "message", at: message.at, item: message })),
+    ...visibleIncoming.map((item) => ({ kind: "file", direction: "in", at: item.at, item })),
+    ...visibleOutgoing.map((item) => ({ kind: "file", direction: "out", at: item.at, item })),
+  ].sort((a, b) => Number(a.at || 0) - Number(b.at || 0));
+  const last = timeline[timeline.length - 1];
+  const shouldStick =
+    nearBottom
+    || !lanMessageSignature
+    || (last?.kind === "message" && last.item.direction === "out")
+    || (last?.kind === "file" && last.direction === "out");
   lanMessageSignature = signature;
   lanMessages.textContent = "";
 
@@ -1263,96 +1508,33 @@ function renderLanMessages(messages) {
     return;
   }
 
-  if (visible.length === 0) {
+  if (timeline.length === 0) {
     lanMessages.appendChild(lanElement(
       "div",
       "lan-empty",
-      `还没有和 ${peer.name || "这台电脑"} 的消息。在下面输入内容即可开始。`,
+      `还没有和 ${lanPeerLabel(peer)} 的消息或文件。输入内容，或点输入框右侧的回形针发送文件。`,
     ));
     return;
   }
 
-  visible.forEach((message) => {
+  timeline.forEach((entry) => {
+    if (entry.kind === "file") {
+      lanMessages.appendChild(renderLanFileMessage(entry.item, entry.direction));
+      return;
+    }
+    const message = entry.item;
     const item = lanElement(
       "article",
       `lan-message${message.direction === "out" ? " out" : ""}`,
     );
     const head = lanElement("div", "lan-message-head");
     const direction = message.direction === "out" ? "发给" : "来自";
-    head.textContent = `${direction} ${message.peerName || "同事"} · ${formatLanTime(message.at)}`;
+    head.textContent =
+      `${direction} ${lanPeerLabelById(message.peerId, message.peerName)} · ${formatLanTime(message.at)}`;
     item.append(head, lanElement("div", "lan-message-body", message.text || ""));
     lanMessages.appendChild(item);
   });
   if (shouldStick) lanMessages.scrollTop = lanMessages.scrollHeight;
-}
-
-function renderLanFiles(incoming, outgoing) {
-  lanFiles.textContent = "";
-  const pending = Array.isArray(incoming) ? incoming : [];
-  const sent = Array.isArray(outgoing) ? outgoing.slice(0, 12) : [];
-
-  if (pending.length === 0 && sent.length === 0) {
-    lanFiles.appendChild(lanElement(
-      "div",
-      "lan-empty",
-      "收到的文件会先出现在这里，点“保存”后才进入下载目录。",
-    ));
-    return;
-  }
-
-  pending.forEach((item) => {
-    const row = lanElement("article", "lan-file incoming");
-    const icon = lanElement("span", "lan-file-icon", "↓");
-    const main = lanElement("span", "lan-file-main");
-    main.appendChild(lanElement("span", "lan-file-name", item.fileName || "未命名文件"));
-    const source = item.fromName || "同事";
-    const ip = item.fromIp ? ` · ${item.fromIp}` : "";
-    main.appendChild(lanElement(
-      "span",
-      "lan-file-meta",
-      `${source}${ip} · ${formatBytes(item.size)} · ${formatLanTime(item.at)}`,
-    ));
-    const actions = lanElement("span", "lan-file-actions");
-    const accept = lanElement("button", "accept", "保存");
-    accept.type = "button";
-    accept.disabled = lanActionBusy;
-    accept.addEventListener("click", () => acceptLanFile(item.id, accept));
-    const discard = lanElement("button", "", "忽略");
-    discard.type = "button";
-    discard.disabled = lanActionBusy;
-    discard.addEventListener("click", () => discardLanFile(item.id, discard));
-    actions.append(accept, discard);
-    row.append(icon, main, actions);
-    lanFiles.appendChild(row);
-  });
-
-  sent.forEach((item) => {
-    const percent = item.size > 0
-      ? Math.max(0, Math.min(100, Math.round((Number(item.done) / Number(item.size)) * 100)))
-      : 0;
-    const statusText =
-      item.status === "done" ? "已发送" : item.status === "error" ? "发送失败" : `发送中 ${percent}%`;
-    const row = lanElement("article", "lan-file");
-    const icon = lanElement("span", "lan-file-icon", "↑");
-    const main = lanElement("span", "lan-file-main");
-    main.appendChild(lanElement("span", "lan-file-name", item.fileName || "未命名文件"));
-    main.appendChild(lanElement(
-      "span",
-      "lan-file-meta",
-      `发给 ${item.peerName || "同事"} · ${statusText} · ${formatBytes(item.size)}`,
-    ));
-    if (item.status === "sending") {
-      const progress = lanElement("span", "lan-progress");
-      const bar = lanElement("span");
-      bar.style.width = `${percent}%`;
-      progress.appendChild(bar);
-      main.appendChild(progress);
-    } else if (item.status === "error" && item.error) {
-      main.appendChild(lanElement("span", "lan-file-meta", item.error));
-    }
-    row.append(icon, main);
-    lanFiles.appendChild(row);
-  });
 }
 
 function truncateLanText(text, limit) {
@@ -1382,7 +1564,7 @@ function notifyNewLanEvents(data) {
       const text = truncateLanText(message.text, 90);
       sendLanSystemNotification(
         "收到新的局域网消息",
-        `${message.peerName || "同事"}：${text || "（空消息）"}`,
+        `${lanPeerLabelById(message.peerId, message.peerName)}：${text || "（空消息）"}`,
       );
     }
   });
@@ -1394,7 +1576,7 @@ function notifyNewLanEvents(data) {
     if (item.status === "pending") {
       sendLanSystemNotification(
         "收到新的局域网文件",
-        `${item.fromName || "同事"} 发来 ${item.fileName || "未命名文件"} · ${formatBytes(item.size)}`,
+        `${lanPeerLabelById(item.fromId, item.fromName)} 发来 ${item.fileName || "未命名文件"} · ${formatBytes(item.size)}`,
       );
     }
   });
@@ -1426,11 +1608,18 @@ function renderLanSnapshot(data) {
     ? ""
     : `${self.discoveryMessage || "自动发现不可用"}。仍可让同事把 IP 发给你，在下方手动添加。`;
 
+  const peerIds = new Set((Array.isArray(data.peers) ? data.peers : []).map((peer) => peer.id));
+  for (const peerId of lanPeerUnread.keys()) {
+    if (!peerIds.has(peerId)) lanPeerUnread.delete(peerId);
+  }
+  syncLanAttention(data);
   renderLanPrivacyState();
   renderLanPeers(Array.isArray(data.peers) ? data.peers : []);
-  renderLanMessages(Array.isArray(data.messages) ? data.messages : []);
-  renderLanFiles(data.incoming, data.outgoing);
-  syncLanAttention(data);
+  renderLanMessages(
+    Array.isArray(data.messages) ? data.messages : [],
+    data.incoming,
+    data.outgoing,
+  );
   notifyNewLanEvents(data);
 }
 
@@ -1510,6 +1699,10 @@ function setView(view) {
   viewLan.hidden = !lanActive;
   if (lanActive) {
     lanAttentionCount = 0;
+    if (lanSelectedPeerId) {
+      lanPeerUnread.delete(lanSelectedPeerId);
+      if (Array.isArray(lanSnapshotData?.peers)) renderLanPeers(lanSnapshotData.peers);
+    }
     updateLanAttention();
     refreshLan({ silent: false });
   }
@@ -1547,7 +1740,7 @@ async function sendLanMessage() {
     lanMessageInput.value = "";
     lanMessageSignature = "";
     await refreshLan({ silent: true });
-    showToast(`消息已发给 ${peer.name}`, "success");
+    showToast(`消息已发给 ${lanPeerLabel(peer)}`, "success");
     lanMessageInput.focus();
   } catch (error) {
     showToast(friendlyError(error), "error");
@@ -1586,7 +1779,7 @@ async function sendLanFilesToPeer(peer, paths) {
     const result = await invoke("lan_send_files", { peerId: peer.id, paths });
     await refreshLan({ silent: true });
     if (result?.sent > 0) {
-      showToast(`已开始向 ${peer.name} 发送 ${result.sent} 个文件`, "success");
+      showToast(`已开始向 ${lanPeerLabel(peer)} 发送 ${result.sent} 个文件`, "success");
     }
     if (Array.isArray(result?.errors) && result.errors.length > 0) {
       showToast(result.errors[0], "error");
@@ -1601,7 +1794,7 @@ async function sendLanFilesToPeer(peer, paths) {
 function showLanDropOverlay(peer) {
   const onlinePeers = (lanSnapshotData?.peers || []).filter((item) => item.online);
   const target = peer || (onlinePeers.length === 1 ? onlinePeers[0] : null);
-  lanDropTitle.textContent = target ? `松开鼠标，发送给 ${target.name}` : "松开鼠标，发送文件";
+  lanDropTitle.textContent = target ? `松开鼠标，发送给 ${lanPeerLabel(target)}` : "松开鼠标，发送文件";
   lanDropHint.textContent = target
     ? "文件会立即开始传输"
     : onlinePeers.length > 1
@@ -1835,6 +2028,7 @@ async function clearLanMessages() {
   try {
     await invoke("lan_clear_messages");
     lanMessageSignature = "";
+    lanPeerUnread.clear();
     await refreshLan({ silent: true });
     showToast("消息记录已清空", "success");
   } catch (error) {
@@ -2025,6 +2219,22 @@ lanPrivacySearch.addEventListener("input", () => {
   renderLanPrivacyList();
 });
 lanPrivacySave.addEventListener("click", saveLanPrivacy);
+lanNoteClose.addEventListener("click", closeLanNote);
+lanNoteCancel.addEventListener("click", closeLanNote);
+lanNoteModal.addEventListener("click", (event) => {
+  if (event.target === lanNoteModal) closeLanNote();
+});
+lanNoteModal.addEventListener("keydown", (event) => {
+  trapModalFocus(event, lanNoteModal, lanNoteDialog);
+});
+lanNoteInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    saveLanNote();
+  }
+});
+lanNoteSave.addEventListener("click", saveLanNote);
+lanNoteRemove.addEventListener("click", removeLanNote);
 lanPermissionBtn.addEventListener("click", openLanPermission);
 lanAddBtn.addEventListener("click", addLanPeer);
 lanAddIp.addEventListener("keydown", (event) => {
@@ -2101,6 +2311,7 @@ document.addEventListener("keydown", (event) => {
     || !updateModal.hidden
     || !lanPermissionModal.hidden
     || !lanPrivacyModal.hidden
+    || !lanNoteModal.hidden
   ) return;
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
     event.preventDefault();

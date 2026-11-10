@@ -24,7 +24,7 @@
           title="检查更新"
         >
           <span class="version-dot" id="versionDot"></span>
-          <span id="versionLabel">v1.2.0</span>
+          <span id="versionLabel">v1.2.1</span>
           <svg class="version-refresh" viewBox="0 0 16 16" aria-hidden="true">
             <path
               d="M13 8a5 5 0 1 1-1.46-3.54M13 3v3.2H9.8"
@@ -334,6 +334,7 @@
               </div>
             </div>
             <div class="lan-self-actions">
+              <button class="text-button" id="lanPermissionBtn" type="button">局域网权限</button>
               <button class="text-button" id="lanRenameBtn" type="button">修改名称</button>
               <button class="text-button" id="lanRefreshBtn" type="button">刷新</button>
             </div>
@@ -374,7 +375,7 @@
               <div class="section-kicker">消息</div>
               <h2>随手发条消息</h2>
             </div>
-            <button class="text-button" id="lanClearMessages" type="button">清空记录</button>
+            <button class="text-button" id="lanClearMessages" type="button">清空全部记录</button>
           </div>
           <div class="lan-messages" id="lanMessages">
             <div class="lan-empty">还没有消息。选择上面的同事后，在下面输入内容。</div>
@@ -393,7 +394,7 @@
           </div>
         </section>
 
-        <section class="card lan-card">
+        <section class="card lan-card" id="lanFileCard">
           <div class="section-head">
             <div>
               <div class="section-kicker">文件</div>
@@ -558,6 +559,10 @@ const info = window.__DUALDNS_ENV__;
               <p>首次启动需要初始化 WebView2 运行时，第一次打开浏览器也要创建独立配置目录，通常会比之后慢。新版本会在界面首帧准备好后再显示窗口，避免启动时出现长时间白屏；后续启动会明显更快。</p>
             </div>
             <div class="faq-item">
+              <strong>macOS 上看不到同事的电脑？</strong>
+              <p>先到“局域网快传”页点“局域网权限”，再点“发起局域网访问”。系统弹出本地网络授权时选择“允许”。重装应用通常会沿用之前的系统授权，因此没有再次弹窗不等于没有权限；请打开“系统设置 → 隐私与安全性 → 本地网络”，确认 DualDNS Browser 已打开。如果两台电脑分属不同网段或公司开启了设备隔离，自动发现也可能受限，可以手动添加对方 IP。</p>
+            </div>
+            <div class="faq-item">
               <strong>开了 Clash / VPN 的 TUN 模式后，外网窗口打不开网站？</strong>
               <p>外网窗口会绑定物理网卡出口，自己向填写的外网 DNS 查询并直连目标 IP，不读取本机 hosts，也不经过 Clash 的 DNS 分流规则。内网窗口仍然只走内网 DNS。若仍失败，请确认外网 DNS 和物理网卡可以正常上网。</p>
             </div>
@@ -592,6 +597,62 @@ const info = window.__DUALDNS_ENV__;
       </section>
     </div>
 
+    <div class="help-backdrop" id="lanPermissionModal" hidden>
+      <section
+        class="help-dialog lan-permission-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="lanPermissionTitle"
+        tabindex="-1"
+      >
+        <header class="help-head">
+          <div>
+            <div class="section-kicker">LOCAL NETWORK</div>
+            <h2 id="lanPermissionTitle">局域网权限</h2>
+          </div>
+          <button class="help-close" id="lanPermissionClose" type="button" aria-label="关闭局域网权限说明">
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="m5 5 10 10M15 5 5 15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+            </svg>
+          </button>
+        </header>
+        <div class="help-body">
+          <p>
+            macOS 13 及以上会单独询问应用能否访问本地网络。若同事的 Mac 看不到其他人，
+            请先在对方电脑上点“发起局域网访问”。系统弹出授权时选择“允许”。
+          </p>
+          <p>
+            如果系统没有弹窗，或之前误点了“拒绝”，请打开
+            <strong>系统设置 → 隐私与安全性 → 本地网络</strong>，确认 DualDNS Browser 已打开。
+            修改后建议退出并重新打开本应用。
+          </p>
+          <div class="lan-permission-actions">
+            <button class="update-check-button" id="lanPermissionProbe" type="button">
+              发起局域网访问
+            </button>
+            <button class="text-button" id="lanPermissionSettings" type="button">
+              打开系统设置
+            </button>
+          </div>
+          <p class="lan-hint" id="lanPermissionResult">
+            同一台 Mac 重新安装应用时，系统通常不会再次弹窗，因为之前的授权记录可能仍然保留。
+          </p>
+        </div>
+        <footer class="help-foot">
+          <span>仅用于局域网设备发现与传输</span>
+          <span>Author: itsleonlu@gmail.com</span>
+        </footer>
+      </section>
+    </div>
+
+    <div class="lan-drop-overlay" id="lanDropOverlay" hidden>
+      <div class="lan-drop-card">
+        <span class="lan-drop-icon">↓</span>
+        <strong id="lanDropTitle">松开鼠标，发送文件</strong>
+        <span id="lanDropHint">文件会发送给当前选中的同事</span>
+      </div>
+    </div>
+
     <div class="help-backdrop" id="updateModal" hidden>
       <section
         class="help-dialog update-dialog"
@@ -616,7 +677,7 @@ const info = window.__DUALDNS_ENV__;
           <div class="update-toolbar">
             <div class="update-current">
               <span class="update-label">当前版本</span>
-              <strong id="updateCurrentVersion">v1.2.0</strong>
+              <strong id="updateCurrentVersion">v1.2.1</strong>
             </div>
             <label class="update-source" for="updateSource">
               <span class="update-label">更新源</span>
@@ -656,7 +717,7 @@ const info = window.__DUALDNS_ENV__;
             <div class="update-result-head">
               <div>
                 <span class="update-label">最新版本</span>
-                <strong id="updateLatest">v1.2.0</strong>
+                <strong id="updateLatest">v1.2.1</strong>
               </div>
               <span class="update-badge" id="updateBadge">有新版本</span>
             </div>

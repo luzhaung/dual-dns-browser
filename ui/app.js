@@ -77,6 +77,7 @@ const lanSelfName = document.getElementById("lanSelfName");
 const lanSelfIp = document.getElementById("lanSelfIp");
 const lanDiscovery = document.getElementById("lanDiscovery");
 const lanVersion = document.getElementById("lanVersion");
+const lanPermissionBtn = document.getElementById("lanPermissionBtn");
 const lanRenameBtn = document.getElementById("lanRenameBtn");
 const lanRefreshBtn = document.getElementById("lanRefreshBtn");
 const lanPeerCount = document.getElementById("lanPeerCount");
@@ -93,6 +94,15 @@ const lanFiles = document.getElementById("lanFiles");
 const lanOpenDownloads = document.getElementById("lanOpenDownloads");
 const lanFileTo = document.getElementById("lanFileTo");
 const lanPickFiles = document.getElementById("lanPickFiles");
+const lanPermissionModal = document.getElementById("lanPermissionModal");
+const lanPermissionClose = document.getElementById("lanPermissionClose");
+const lanPermissionDialog = lanPermissionModal.querySelector(".lan-permission-dialog");
+const lanPermissionProbe = document.getElementById("lanPermissionProbe");
+const lanPermissionSettings = document.getElementById("lanPermissionSettings");
+const lanPermissionResult = document.getElementById("lanPermissionResult");
+const lanDropOverlay = document.getElementById("lanDropOverlay");
+const lanDropTitle = document.getElementById("lanDropTitle");
+const lanDropHint = document.getElementById("lanDropHint");
 
 const DEFAULTS = {
   internal_dns: "192.168.2.19",
@@ -118,7 +128,7 @@ let updateBusy = false;
 let updateInstallBusy = false;
 let updateInstallLink = null;
 let updateSource = readStorage("dualdns.updateSource", "auto");
-let currentVersion = "1.2.0";
+let currentVersion = "1.2.1";
 let currentPlatformLabel = "";
 let dismissedUpdate = readStorage("dualdns.dismissedUpdate", "");
 let currentView = "browser";
@@ -133,6 +143,7 @@ let lanSeenAttention = new Set();
 let lanAttentionPrimed = false;
 let lanAttentionCount = 0;
 let lanMessageSignature = "";
+let lanPermissionReturnFocus = null;
 
 function readStorage(key, fallback) {
   try {
@@ -283,7 +294,10 @@ function closeHelp() {
 }
 
 function syncModalLock() {
-  document.body.classList.toggle("help-open", !helpModal.hidden || !updateModal.hidden);
+  document.body.classList.toggle(
+    "help-open",
+    !helpModal.hidden || !updateModal.hidden || !lanPermissionModal.hidden,
+  );
 }
 
 function modalFocusable(modal) {
@@ -295,6 +309,7 @@ function trapModalFocus(event, modal, dialog) {
   if (event.key === "Escape") {
     event.preventDefault();
     if (modal === updateModal) closeUpdates();
+    else if (modal === lanPermissionModal) closeLanPermission();
     else closeHelp();
     return;
   }
@@ -904,6 +919,8 @@ function selectLanPeer(peerId, options = {}) {
   if (!lanSnapshotData?.peers?.some((peer) => peer.id === peerId)) return;
   lanSelectedPeerId = peerId;
   renderLanPeers(lanSnapshotData.peers);
+  lanMessageSignature = "";
+  renderLanMessages(Array.isArray(lanSnapshotData.messages) ? lanSnapshotData.messages : []);
   renderLanTargets();
   if (options.focusMessage) {
     lanMessageInput.focus();
@@ -916,6 +933,7 @@ function selectLanPeer(peerId, options = {}) {
 function renderLanPeers(peers) {
   if (lanSelectedPeerId && !peers.some((peer) => peer.id === lanSelectedPeerId)) {
     lanSelectedPeerId = "";
+    lanMessageSignature = "";
   }
   const online = peers.filter((peer) => peer.online).length;
   lanPeerCount.textContent = `${online} 台在线 · 共 ${peers.length} 台`;
@@ -985,23 +1003,36 @@ function renderLanPeers(peers) {
 }
 
 function renderLanMessages(messages) {
-  const signature = messages.map((message) => `${message.id}:${message.at}`).join("|");
+  const peer = selectedLanPeer();
+  const visible = peer
+    ? messages.filter((message) => message.peerId === peer.id)
+    : [];
+  const signature = `${peer?.id || ""}:${visible.map((message) => `${message.id}:${message.at}`).join("|")}`;
   if (signature === lanMessageSignature) return;
   const nearBottom =
     lanMessages.scrollHeight - lanMessages.scrollTop - lanMessages.clientHeight < 64;
   lanMessageSignature = signature;
   lanMessages.textContent = "";
 
-  if (messages.length === 0) {
+  if (!peer) {
     lanMessages.appendChild(lanElement(
       "div",
       "lan-empty",
-      "还没有消息。选择上面的同事后，在下面输入内容。",
+      "请先在上方选择一台电脑，这里只显示和当前电脑的消息。",
     ));
     return;
   }
 
-  messages.forEach((message) => {
+  if (visible.length === 0) {
+    lanMessages.appendChild(lanElement(
+      "div",
+      "lan-empty",
+      `还没有和 ${peer.name || "这台电脑"} 的消息。在下面输入内容即可开始。`,
+    ));
+    return;
+  }
+
+  visible.forEach((message) => {
     const item = lanElement(
       "article",
       `lan-message${message.direction === "out" ? " out" : ""}`,
@@ -1210,7 +1241,6 @@ async function sendLanMessage() {
 }
 
 async function pickAndSendLanFiles() {
-  if (lanActionBusy) return;
   const peer = selectedLanPeer();
   if (!peer) {
     showToast("请先选择一个同事的设备", "error");
@@ -1220,10 +1250,23 @@ async function pickAndSendLanFiles() {
     showToast("当前为界面预览模式，桌面应用中才能发送文件", "error");
     return;
   }
-  setLanActionBusy(true);
   try {
     const paths = await invoke("lan_pick_files");
     if (!Array.isArray(paths) || paths.length === 0) return;
+    await sendLanFilesToPeer(peer, paths);
+  } catch (error) {
+    showToast(friendlyError(error), "error");
+  }
+}
+
+async function sendLanFilesToPeer(peer, paths) {
+  if (!peer || !Array.isArray(paths) || paths.length === 0 || lanActionBusy) return;
+  if (!invoke) {
+    showToast("当前为界面预览模式，桌面应用中才能发送文件", "error");
+    return;
+  }
+  setLanActionBusy(true);
+  try {
     const result = await invoke("lan_send_files", { peerId: peer.id, paths });
     await refreshLan({ silent: true });
     if (result?.sent > 0) {
@@ -1237,6 +1280,102 @@ async function pickAndSendLanFiles() {
   } finally {
     setLanActionBusy(false);
   }
+}
+
+function showLanDropOverlay(peer) {
+  const onlinePeers = (lanSnapshotData?.peers || []).filter((item) => item.online);
+  const target = peer || (onlinePeers.length === 1 ? onlinePeers[0] : null);
+  lanDropTitle.textContent = target ? `松开鼠标，发送给 ${target.name}` : "松开鼠标，发送文件";
+  lanDropHint.textContent = target
+    ? "文件会立即开始传输"
+    : onlinePeers.length > 1
+      ? "请先在局域网快传页选择接收文件的电脑"
+      : "请先让同事打开本应用并连接到同一局域网";
+  lanDropOverlay.hidden = false;
+}
+
+function hideLanDropOverlay() {
+  lanDropOverlay.hidden = true;
+}
+
+async function handleLanDrop(paths) {
+  hideLanDropOverlay();
+  if (!Array.isArray(paths) || paths.length === 0) return;
+  if (currentView !== "lan") setView("lan");
+  let peer = selectedLanPeer();
+  if (!peer) {
+    const onlinePeers = (lanSnapshotData?.peers || []).filter((item) => item.online);
+    if (onlinePeers.length === 1) {
+      selectLanPeer(onlinePeers[0].id);
+      peer = onlinePeers[0];
+    }
+  }
+  if (!peer) {
+    showToast("请先在局域网快传页选择接收文件的电脑", "error");
+    return;
+  }
+  await sendLanFilesToPeer(peer, paths);
+}
+
+function openLanPermission() {
+  lanPermissionReturnFocus = document.activeElement;
+  lanPermissionModal.hidden = false;
+  syncModalLock();
+  window.requestAnimationFrame(() => lanPermissionDialog.focus());
+}
+
+function closeLanPermission() {
+  if (lanPermissionModal.hidden) return;
+  lanPermissionModal.hidden = true;
+  syncModalLock();
+  if (lanPermissionReturnFocus instanceof HTMLElement) {
+    lanPermissionReturnFocus.focus();
+  }
+}
+
+async function probeLanNetworkAccess() {
+  if (!invoke) {
+    lanPermissionResult.textContent = "当前为界面预览模式，桌面应用中才能发起局域网访问。";
+    return;
+  }
+  lanPermissionProbe.disabled = true;
+  lanPermissionResult.textContent = "正在发起局域网访问…如果系统弹出授权，请选择“允许”。";
+  try {
+    const ip = lanSnapshotData?.self?.ip || null;
+    await invoke("lan_probe_network_access", { ip });
+    lanPermissionResult.textContent =
+      "已发起访问。若没有看到授权弹窗，请点“打开系统设置”，确认 DualDNS Browser 的本地网络开关已打开。";
+  } catch (error) {
+    lanPermissionResult.textContent = friendlyError(error);
+  } finally {
+    lanPermissionProbe.disabled = false;
+  }
+}
+
+async function openLanPrivacySettings() {
+  if (!invoke) return;
+  try {
+    await invoke("open_lan_privacy_settings");
+    lanPermissionResult.textContent =
+      "已打开系统设置。请到“隐私与安全性 → 本地网络”中允许 DualDNS Browser，然后退出并重新打开应用。";
+  } catch (error) {
+    lanPermissionResult.textContent = friendlyError(error);
+  }
+}
+
+async function initLanDropListener() {
+  const currentWindow = window.__TAURI__?.webviewWindow?.getCurrentWebviewWindow?.();
+  if (!currentWindow?.onDragDropEvent) return;
+  await currentWindow.onDragDropEvent((event) => {
+    const payload = event?.payload || {};
+    if (payload.type === "enter" || payload.type === "over") {
+      showLanDropOverlay(selectedLanPeer());
+    } else if (payload.type === "drop") {
+      handleLanDrop(payload.paths);
+    } else {
+      hideLanDropOverlay();
+    }
+  });
 }
 
 async function addLanPeer() {
@@ -1299,7 +1438,7 @@ async function discardLanFile(id, button) {
 
 async function clearLanMessages() {
   if (lanActionBusy || !invoke) return;
-  if (!window.confirm("清空本机保存的局域网消息记录？已接收的文件不会删除。")) return;
+  if (!window.confirm("清空本机保存的全部局域网消息记录？已接收的文件不会删除。")) return;
   setLanActionBusy(true);
   try {
     await invoke("lan_clear_messages");
@@ -1472,6 +1611,7 @@ lanSelfName.addEventListener("keydown", (event) => {
   }
 });
 lanRefreshBtn.addEventListener("click", () => refreshLan({ silent: false }));
+lanPermissionBtn.addEventListener("click", openLanPermission);
 lanAddBtn.addEventListener("click", addLanPeer);
 lanAddIp.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
@@ -1496,6 +1636,15 @@ lanOpenDownloads.addEventListener("click", async () => {
     showToast(friendlyError(error), "error");
   }
 });
+lanPermissionClose.addEventListener("click", closeLanPermission);
+lanPermissionModal.addEventListener("click", (event) => {
+  if (event.target === lanPermissionModal) closeLanPermission();
+});
+lanPermissionModal.addEventListener("keydown", (event) => {
+  trapModalFocus(event, lanPermissionModal, lanPermissionDialog);
+});
+lanPermissionProbe.addEventListener("click", probeLanNetworkAccess);
+lanPermissionSettings.addEventListener("click", openLanPrivacySettings);
 helpBtn.addEventListener("click", openHelp);
 helpClose.addEventListener("click", closeHelp);
 helpModal.addEventListener("click", (event) => {
@@ -1533,12 +1682,16 @@ updateRelease.addEventListener("click", () => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (!helpModal.hidden || !updateModal.hidden) return;
+  if (!helpModal.hidden || !updateModal.hidden || !lanPermissionModal.hidden) return;
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
     event.preventDefault();
     openBothEnvs();
   }
 });
+
+window.addEventListener("dragover", (event) => event.preventDefault());
+window.addEventListener("drop", (event) => event.preventDefault());
+initLanDropListener().catch(() => {});
 
 if (!/Mac|iPhone|iPad/.test(navigator.platform)) {
   bothShortcut.textContent = "Ctrl ↵";

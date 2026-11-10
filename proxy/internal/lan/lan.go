@@ -30,6 +30,7 @@ const (
 	defaultHTTPPort   = 18190
 	defaultUDPPort    = 18191
 	beaconInterval    = 3 * time.Second
+	registerInterval  = 15 * time.Second
 	peerOnlineWindow  = 12 * time.Second
 	peerKeepWindow    = 10 * time.Minute
 	maxMessages       = 300
@@ -41,17 +42,18 @@ const (
 )
 
 type peer struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	IP         string `json:"ip"`
-	Port       int    `json:"port"`
-	Token      string `json:"token"`
-	Version    string `json:"version"`
-	LastSeen   int64  `json:"lastSeen"`
-	Manual     bool   `json:"manual"`
-	Online     bool   `json:"online"`
-	Platform   string `json:"platform"`
-	ReportedIP string `json:"reportedIp"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	IP           string `json:"ip"`
+	Port         int    `json:"port"`
+	Token        string `json:"token"`
+	Version      string `json:"version"`
+	LastSeen     int64  `json:"lastSeen"`
+	Manual       bool   `json:"manual"`
+	Online       bool   `json:"online"`
+	Platform     string `json:"platform"`
+	ReportedIP   string `json:"reportedIp"`
+	lastRegister int64
 }
 
 type message struct {
@@ -307,6 +309,7 @@ func (s *Service) stop() {
 func (s *Service) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/__ddb/lan/health", s.handleHealth)
+	mux.HandleFunc("/__ddb/lan/register", s.handleRegister)
 	mux.HandleFunc("/__ddb/lan/snapshot", s.handleSnapshot)
 	mux.HandleFunc("/__ddb/lan/name", s.handleName)
 	mux.HandleFunc("/__ddb/lan/add-peer", s.handleAddPeer)
@@ -381,6 +384,28 @@ func (s *Service) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.RUnlock()
 	writeJSON(w, http.StatusOK, body)
+}
+
+func (s *Service) handleRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "只支持 POST")
+		return
+	}
+	var item beacon
+	if err := decodeJSON(r, &item); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	source := net.ParseIP(strings.Trim(host, "[]"))
+	if ok, _ := s.absorbBeacon(item, source); !ok {
+		writeError(w, http.StatusBadRequest, "注册信息无效")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.ownBeacon())
 }
 
 func (s *Service) handleSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -506,6 +531,7 @@ func (s *Service) handleAddPeer(w http.ResponseWriter, r *http.Request) {
 	item.Online = true
 	s.peers[item.ID] = item
 	s.mu.Unlock()
+	go s.registerPeer(s.peerBeacon(item.ID, item.Name, item.IP, item.Port, item.Token, item.Version, item.Platform))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "peer": item})
 }
 
@@ -544,10 +570,20 @@ func (s *Service) sendMessage(peerID, text string) (message, error) {
 	if err != nil {
 		return message{}, err
 	}
+	s.mu.RLock()
+	fromIP := s.selfIP
+	fromPort := s.httpPort
+	fromToken := s.token
+	s.mu.RUnlock()
 	payload, _ := json.Marshal(map[string]any{
-		"fromId":   s.id,
-		"fromName": s.name,
-		"text":     text,
+		"fromId":       s.id,
+		"fromName":     s.name,
+		"fromIp":       fromIP,
+		"fromPort":     fromPort,
+		"fromToken":    fromToken,
+		"fromPlatform": runtime.GOOS,
+		"fromRelease":  s.appVersion,
+		"text":         text,
 	})
 	err = s.postToPeer(target, "/__ddb/lan/incoming-message", payload, 10*time.Second)
 	if err != nil {
@@ -575,9 +611,14 @@ func (s *Service) handleIncomingMessage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var body struct {
-		FromID   string `json:"fromId"`
-		FromName string `json:"fromName"`
-		Text     string `json:"text"`
+		FromID       string `json:"fromId"`
+		FromName     string `json:"fromName"`
+		FromIP       string `json:"fromIp"`
+		FromPort     int    `json:"fromPort"`
+		FromToken    string `json:"fromToken"`
+		FromPlatform string `json:"fromPlatform"`
+		FromRelease  string `json:"fromRelease"`
+		Text         string `json:"text"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -601,8 +642,12 @@ func (s *Service) handleIncomingMessage(w http.ResponseWriter, r *http.Request) 
 	if existing, ok := s.peers[body.FromID]; ok {
 		existing.Name = name
 		existing.LastSeen = at
+		existing.Online = true
 	}
 	s.mu.Unlock()
+	if s.rememberSender(r, body.FromID, name, body.FromIP, body.FromPort, body.FromToken, body.FromRelease, body.FromPlatform) {
+		go s.registerPeer(s.peerBeacon(body.FromID, name, body.FromIP, body.FromPort, body.FromToken, body.FromRelease, body.FromPlatform))
+	}
 	item := message{
 		ID:        randomHex(8),
 		Direction: "in",
@@ -796,35 +841,44 @@ func (s *Service) startDiscovery() {
 			if json.Unmarshal(buffer[:n], &item) != nil {
 				continue
 			}
-			s.absorbBeacon(item, addr.IP)
+			if ok, shouldRegister := s.absorbBeacon(item, addr.IP); ok && shouldRegister {
+				if addr.IP != nil && !addr.IP.IsLoopback() {
+					item.IP = addr.IP.String()
+				}
+				go s.registerPeer(item)
+			}
 		}
 	}()
 }
 
-func (s *Service) absorbBeacon(item beacon, source net.IP) {
+func (s *Service) absorbBeacon(item beacon, source net.IP) (bool, bool) {
 	if item.App != appTag || item.Version != protoVersion || !validID(item.ID) || item.ID == s.id {
-		return
+		return false, false
 	}
 	if item.Port < 1024 || item.Port > 65535 {
-		return
+		return false, false
 	}
 	ip := item.IP
 	if source != nil && source.To4() != nil && !source.IsLoopback() {
 		ip = source.String()
 	}
 	if net.ParseIP(ip) == nil {
-		return
+		return false, false
 	}
 	now := time.Now().UnixMilli()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, exists := s.peers[item.ID]; !exists && len(s.peers) >= maxPeers {
-		return
+		return false, false
 	}
 	existing := s.peers[item.ID]
+	shouldRegister := existing == nil || now-existing.lastRegister >= registerInterval.Milliseconds()
 	if existing == nil {
 		existing = &peer{ID: item.ID, Manual: false}
 		s.peers[item.ID] = existing
+	}
+	if shouldRegister {
+		existing.lastRegister = now
 	}
 	existing.Name = cleanName(item.Name)
 	if existing.Name == "" {
@@ -838,6 +892,7 @@ func (s *Service) absorbBeacon(item beacon, source net.IP) {
 	existing.Platform = item.Platform
 	existing.LastSeen = now
 	existing.Online = true
+	return true, shouldRegister
 }
 
 func (s *Service) beaconLoop() {
@@ -856,19 +911,7 @@ func (s *Service) beaconLoop() {
 }
 
 func (s *Service) broadcast() {
-	s.mu.RLock()
-	item := beacon{
-		App:      appTag,
-		Version:  protoVersion,
-		ID:       s.id,
-		Name:     s.name,
-		IP:       s.selfIP,
-		Port:     s.httpPort,
-		Token:    s.token,
-		Release:  s.appVersion,
-		Platform: runtime.GOOS,
-	}
-	s.mu.RUnlock()
+	item := s.ownBeacon()
 	if item.IP == "" {
 		return
 	}
@@ -885,6 +928,127 @@ func (s *Service) broadcast() {
 		_, _ = conn.Write(data)
 		_ = conn.Close()
 	}
+}
+
+func (s *Service) ownBeacon() beacon {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return beacon{
+		App:      appTag,
+		Version:  protoVersion,
+		ID:       s.id,
+		Name:     s.name,
+		IP:       s.selfIP,
+		Port:     s.httpPort,
+		Token:    s.token,
+		Release:  s.appVersion,
+		Platform: runtime.GOOS,
+	}
+}
+
+func (s *Service) peerBeacon(id, name, ip string, port int, token, release, platform string) beacon {
+	return beacon{
+		App:      appTag,
+		Version:  protoVersion,
+		ID:       id,
+		Name:     name,
+		IP:       ip,
+		Port:     port,
+		Token:    token,
+		Release:  release,
+		Platform: platform,
+	}
+}
+
+func (s *Service) registerPeer(target beacon) {
+	if target.App != appTag || !validID(target.ID) || target.ID == s.id {
+		return
+	}
+	if target.Port < 1024 || target.Port > 65535 || net.ParseIP(target.IP) == nil {
+		return
+	}
+	payload, err := json.Marshal(s.ownBeacon())
+	if err != nil {
+		return
+	}
+
+	udp, err := net.DialUDP("udp4", nil, &net.UDPAddr{
+		IP:   net.ParseIP(target.IP),
+		Port: s.discoveryPort,
+	})
+	if err == nil {
+		_ = udp.SetWriteDeadline(time.Now().Add(1500 * time.Millisecond))
+		_, _ = udp.Write(payload)
+		_ = udp.Close()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	url := fmt.Sprintf("http://%s:%d/__ddb/lan/register", target.IP, target.Port)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(payload)))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-DDB-App", appTag)
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+	var reply beacon
+	if json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&reply) == nil {
+		s.absorbBeacon(reply, net.ParseIP(target.IP))
+	}
+}
+
+func (s *Service) rememberSender(r *http.Request, id, name, reportedIP string, port int, token, release, platform string) bool {
+	if !validID(id) || port < 1024 || port > 65535 || len(token) != 32 {
+		return false
+	}
+	ip := reportedIP
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	remote := net.ParseIP(strings.Trim(host, "[]"))
+	if remote != nil && remote.To4() != nil && !remote.IsLoopback() {
+		ip = remote.String()
+	}
+	if net.ParseIP(ip) == nil {
+		return false
+	}
+	now := time.Now().UnixMilli()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing := s.peers[id]
+	shouldRegister := existing == nil || now-existing.lastRegister >= registerInterval.Milliseconds()
+	if existing == nil {
+		if len(s.peers) >= maxPeers {
+			return false
+		}
+		existing = &peer{ID: id, Manual: false}
+		s.peers[id] = existing
+	}
+	existing.Name = cleanName(name)
+	if existing.Name == "" {
+		existing.Name = "同事"
+	}
+	existing.IP = ip
+	existing.ReportedIP = reportedIP
+	existing.Port = port
+	existing.Token = token
+	existing.Version = release
+	existing.Platform = platform
+	existing.LastSeen = now
+	existing.Online = true
+	if shouldRegister {
+		existing.lastRegister = now
+	}
+	return shouldRegister
 }
 
 func (s *Service) prunePeers() {

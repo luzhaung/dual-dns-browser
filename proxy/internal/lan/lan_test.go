@@ -1,8 +1,11 @@
 package lan
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -76,5 +79,72 @@ func TestSanitizeFileName(t *testing.T) {
 		if got := sanitizeFileName(input); got != want {
 			t.Errorf("sanitizeFileName(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestRegisterCreatesReversePeer(t *testing.T) {
+	service, err := newService(t.TempDir(), defaultHTTPPort, defaultUDPPort, "test")
+	if err != nil {
+		t.Fatalf("newService: %v", err)
+	}
+	payload, err := json.Marshal(beacon{
+		App:      appTag,
+		Version:  protoVersion,
+		ID:       "11223344",
+		Name:     "同事的 Mac",
+		IP:       "172.16.99.44",
+		Port:     18190,
+		Token:    strings.Repeat("a", 32),
+		Release:  "1.2.1",
+		Platform: "darwin",
+	})
+	if err != nil {
+		t.Fatalf("marshal beacon: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/__ddb/lan/register", bytes.NewReader(payload))
+	req.RemoteAddr = "172.16.99.44:51234"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-DDB-App", appTag)
+	result := httptest.NewRecorder()
+	service.routes().ServeHTTP(result, req)
+	if result.Code != http.StatusOK {
+		t.Fatalf("register status = %d, want 200: %s", result.Code, result.Body.String())
+	}
+
+	service.mu.RLock()
+	peer := service.peers["11223344"]
+	service.mu.RUnlock()
+	if peer == nil {
+		t.Fatal("register did not remember the sending peer")
+	}
+	if peer.IP != "172.16.99.44" {
+		t.Fatalf("peer IP = %q, want source address", peer.IP)
+	}
+	if peer.Token != strings.Repeat("a", 32) {
+		t.Fatalf("peer token was not stored for reverse registration")
+	}
+}
+
+func TestAbsorbBeaconSchedulesReverseRegistration(t *testing.T) {
+	service, err := newService(t.TempDir(), defaultHTTPPort, defaultUDPPort, "test")
+	if err != nil {
+		t.Fatalf("newService: %v", err)
+	}
+	item := beacon{
+		App:     appTag,
+		Version: protoVersion,
+		ID:      "aabbccdd",
+		Name:    "同事",
+		IP:      "172.16.103.46",
+		Port:    18190,
+		Token:   strings.Repeat("b", 32),
+	}
+	ok, shouldRegister := service.absorbBeacon(item, nil)
+	if !ok || !shouldRegister {
+		t.Fatalf("first beacon = (%v, %v), want (true, true)", ok, shouldRegister)
+	}
+	ok, shouldRegister = service.absorbBeacon(item, nil)
+	if !ok || shouldRegister {
+		t.Fatalf("immediate repeat beacon = (%v, %v), want (true, false)", ok, shouldRegister)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -138,6 +139,11 @@ func (s *Service) doUpload(id string, target peer, reader io.Reader, fileName st
 	req.Header.Set("X-DDB-File-Size", strconv.FormatInt(size, 10))
 	req.Header.Set("X-DDB-From-Id", s.id)
 	req.Header.Set("X-DDB-From-Name", base64.RawURLEncoding.EncodeToString([]byte(s.name)))
+	req.Header.Set("X-DDB-From-Ip", s.selfIP)
+	req.Header.Set("X-DDB-From-Port", strconv.Itoa(s.httpPort))
+	req.Header.Set("X-DDB-From-Token", s.token)
+	req.Header.Set("X-DDB-From-Release", s.appVersion)
+	req.Header.Set("X-DDB-From-Platform", runtime.GOOS)
 
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -227,6 +233,14 @@ func (s *Service) handleIncomingFile(w http.ResponseWriter, r *http.Request) {
 		if cleaned := cleanName(string(raw)); cleaned != "" {
 			fromName = cleaned
 		}
+	}
+	fromPort, _ := strconv.Atoi(r.Header.Get("X-DDB-From-Port"))
+	fromToken := strings.TrimSpace(r.Header.Get("X-DDB-From-Token"))
+	fromIP := strings.TrimSpace(r.Header.Get("X-DDB-From-Ip"))
+	fromRelease := strings.TrimSpace(r.Header.Get("X-DDB-From-Release"))
+	fromPlatform := strings.TrimSpace(r.Header.Get("X-DDB-From-Platform"))
+	if s.rememberSender(r, fromID, fromName, fromIP, fromPort, fromToken, fromRelease, fromPlatform) {
+		go s.registerPeer(s.peerBeacon(fromID, fromName, fromIP, fromPort, fromToken, fromRelease, fromPlatform))
 	}
 
 	s.mu.RLock()

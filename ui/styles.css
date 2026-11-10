@@ -2600,6 +2600,78 @@ html[data-platform="windows"] .toast {
   text-align: center;
 }
 
+.lan-permission-dialog {
+  width: min(520px, calc(100vw - 36px));
+}
+
+.lan-permission-dialog strong {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.lan-permission-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 12px;
+}
+
+.lan-permission-actions .update-check-button {
+  flex: none;
+}
+
+.lan-drop-overlay {
+  position: fixed;
+  z-index: 120;
+  inset: 12px;
+  display: grid;
+  place-items: center;
+  border: 2px dashed rgba(44, 98, 214, 0.55);
+  border-radius: 20px;
+  background: rgba(238, 243, 255, 0.92);
+  backdrop-filter: blur(6px);
+}
+
+.lan-drop-overlay[hidden] {
+  display: none;
+}
+
+.lan-drop-card {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 8px;
+  padding: 28px 36px;
+  border: 1px solid rgba(44, 98, 214, 0.18);
+  border-radius: 18px;
+  color: var(--ink);
+  background: #fff;
+  box-shadow: 0 22px 60px rgba(27, 51, 95, 0.18);
+  text-align: center;
+}
+
+.lan-drop-card strong {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.lan-drop-card > span:last-child {
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
+.lan-drop-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 13px;
+  color: #fff;
+  background: var(--internal);
+  font-size: 20px;
+  font-weight: 500;
+}
+
 @media (max-width: 700px) {
   .lan-self {
     flex-direction: column;

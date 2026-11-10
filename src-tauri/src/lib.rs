@@ -6,7 +6,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs::{self, OpenOptions},
     io::{Read, Write},
-    net::{IpAddr, SocketAddr, TcpStream},
+    net::{IpAddr, SocketAddr, TcpStream, UdpSocket},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -1925,6 +1925,52 @@ fn lan_open_downloads(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn lan_probe_network_access(ip: Option<String>) -> Result<String, String> {
+    let mut attempted = false;
+    if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
+        if socket.set_broadcast(true).is_ok()
+            && socket
+                .send_to(b"dualdns-local-network-check", "255.255.255.255:18191")
+                .is_ok()
+        {
+            attempted = true;
+        }
+    }
+
+    if let Some(raw_ip) = ip {
+        if let Ok(address) = raw_ip.parse::<IpAddr>() {
+            if !address.is_loopback() {
+                let target = SocketAddr::new(address, LAN_PORT);
+                let _ = TcpStream::connect_timeout(&target, Duration::from_millis(1200));
+                attempted = true;
+            }
+        }
+    }
+
+    if attempted {
+        Ok("已发起局域网访问".to_string())
+    } else {
+        Err("无法发起局域网访问，请检查网络连接".to_string())
+    }
+}
+
+#[tauri::command]
+fn open_lan_privacy_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_LocalNetwork")
+            .spawn()
+            .map_err(|error| format!("打开系统设置失败: {error}"))?;
+        return Ok(());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("只有 macOS 需要单独设置本地网络权限".to_string())
+    }
+}
+
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -2039,7 +2085,9 @@ pub fn run() {
             lan_accept_transfer,
             lan_discard_transfer,
             lan_clear_messages,
-            lan_open_downloads
+            lan_open_downloads,
+            lan_probe_network_access,
+            open_lan_privacy_settings
         ])
         .build(tauri::generate_context!())
         .expect("error while building DualDNS Browser");

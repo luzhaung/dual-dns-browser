@@ -1,21 +1,21 @@
 {
-  "version": "1.2.3",
-  "published_at": "2026-11-10T19:39:02.434Z",
-  "notes": "## v1.2.3\n\n局域网快传新增同事搜索和隐身模式。\n\n- 在线同事列表改为固定高度、独立滚动，同事较多时不会把整页撑开。\n- 新增同事搜索，可按电脑名称、IP、macOS / Windows 快速筛选。\n- 新增“隐身模式”：只允许名单内的电脑发现自己、发消息或传文件。\n- 隐身名单支持搜索、勾选和离线状态显示，设置保存在本机。\n- 适合在自己的两台电脑之间互传：先互相发现并加入名单，再开启隐身。\n- 隐身期间禁止手动添加新 IP，避免非名单设备被意外带回列表。\n- 隐身是应用层访问控制，不加密局域网传输；使用说明中已补充安全边界。",
-  "release_page": "https://gitee.com/phpbest/dual-dns-browser/releases/tag/v1.2.3",
+  "version": "1.2.4",
+  "published_at": "2026-11-10T19:48:27.493Z",
+  "notes": "## v1.2.4\n\n修复局域网快传页的空白状态标签。\n\n- 修复未开启隐身模式时，“局域网快传”标题下出现一个空白小方块的问题。\n- 统一隐藏元素的显示规则，避免其他带 `hidden` 属性的控件被样式意外显示。\n- 不改动内外网浏览、DNS、更新、托盘和局域网传输逻辑。",
+  "release_page": "https://gitee.com/phpbest/dual-dns-browser/releases/tag/v1.2.4",
   "downloads": {
-    "macos-aarch64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.3/DualDNS-Browser-1.2.3-macOS-AppleSilicon.dmg",
-    "macos-x86_64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.3/DualDNS-Browser-1.2.3-macOS-Intel.dmg",
-    "windows-x86_64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.3/DualDNS-Browser-1.2.3-Windows-x64-Setup.exe"
+    "macos-aarch64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.4/DualDNS-Browser-1.2.4-macOS-AppleSilicon.dmg",
+    "macos-x86_64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.4/DualDNS-Browser-1.2.4-macOS-Intel.dmg",
+    "windows-x86_64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.4/DualDNS-Browser-1.2.4-Windows-x64-Setup.exe"
   },
   "checksums": {
-    "macos-aarch64": "9faf346258307c5d802f69aea8e5dc95814986472a9dae2e241201b813adfe0b",
-    "macos-x86_64": "63eccc11986693c29def39a093e4968056ee220a6b70ac36c05d95455212136f",
-    "windows-x86_64": "063c0cc57e8d6c41acbaf2a9088717f7adb2f229d66045e832c7c5a6fd86833b"
+    "macos-aarch64": "0df625b55831c61415aea71c57d9819df32a08ad2073f13346badbd714efaf55",
+    "macos-x86_64": "d6ab68f807f8ca909c41449b28e271179774a582d27a9be7bbc1b6faffeed1f1",
+    "windows-x86_64": "8d07abbd276a1ae82b94fa2ce9ca163d64ac5d8561603a5fccf52d4264eb8ba9"
   },
   "sizes": {
-    "macos-aarch64": 5870152,
-    "macos-x86_64": 6471244,
-    "windows-x86_64": 4477286
+    "macos-aarch64": 5869726,
+    "macos-x86_64": 6471301,
+    "windows-x86_64": 4476776
   }
 }

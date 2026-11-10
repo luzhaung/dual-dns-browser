@@ -1,21 +1,21 @@
 {
-  "version": "1.2.2",
-  "published_at": "2026-11-10T18:49:10.568Z",
-  "notes": "优化局域网快传的操作反馈和界面细节。\n\n- 刷新按钮新增“刷新中…”状态和完成提示，刷新成功后会显示具体时间。\n- 消息区改为固定高度、独立滚动，新消息自动滚到底部；向上查看历史消息时不会被强制拉回。\n- 收到新消息或新文件时发送系统通知，首次打开页面不会对历史记录重复提醒。\n- 重新设计“局域网权限”弹窗：增加状态卡、三步说明和探测结果，按钮不再被挤成竖排。\n- “发起局域网访问”会探测本机网段、已知同事和广播地址，并显示实际探测结果，不再点了没有反应。\n- macOS 的“打开系统设置”会说明部分系统版本停在隐私首页，需要向下滚动到“本地网络”。\n- Windows 的“局域网权限”改为打开防火墙设置，并可把应用加入专用网络允许列表。\n- 不改动原有内外网浏览器、DNS 配置、应用内更新和托盘行为。",
-  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.2.2",
+  "version": "1.2.3",
+  "published_at": "2026-11-10T19:39:02.434Z",
+  "notes": "## v1.2.3\n\n局域网快传新增同事搜索和隐身模式。\n\n- 在线同事列表改为固定高度、独立滚动，同事较多时不会把整页撑开。\n- 新增同事搜索，可按电脑名称、IP、macOS / Windows 快速筛选。\n- 新增“隐身模式”：只允许名单内的电脑发现自己、发消息或传文件。\n- 隐身名单支持搜索、勾选和离线状态显示，设置保存在本机。\n- 适合在自己的两台电脑之间互传：先互相发现并加入名单，再开启隐身。\n- 隐身期间禁止手动添加新 IP，避免非名单设备被意外带回列表。\n- 隐身是应用层访问控制，不加密局域网传输；使用说明中已补充安全边界。",
+  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.2.3",
   "downloads": {
-    "macos-aarch64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.2.2/DualDNS-Browser-1.2.2-macOS-AppleSilicon.dmg",
-    "macos-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.2.2/DualDNS-Browser-1.2.2-macOS-Intel.dmg",
-    "windows-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.2.2/DualDNS-Browser-1.2.2-Windows-x64-Setup.exe"
+    "macos-aarch64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.2.3/DualDNS-Browser-1.2.3-macOS-AppleSilicon.dmg",
+    "macos-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.2.3/DualDNS-Browser-1.2.3-macOS-Intel.dmg",
+    "windows-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.2.3/DualDNS-Browser-1.2.3-Windows-x64-Setup.exe"
   },
   "checksums": {
-    "macos-aarch64": "49c63ca3f6b41f3a8ca5a2109fe8973b45afe5b00f89b59c021b15ec1702b112",
-    "macos-x86_64": "b21ccbb172544519f09ccc6608eaec9fd73c5fcbe07216e8baf7028f0612e151",
-    "windows-x86_64": "b077b7fd9fe1e6f633b158b66d31a733ceb9f800c115ee67214b566a3c68224b"
+    "macos-aarch64": "9faf346258307c5d802f69aea8e5dc95814986472a9dae2e241201b813adfe0b",
+    "macos-x86_64": "63eccc11986693c29def39a093e4968056ee220a6b70ac36c05d95455212136f",
+    "windows-x86_64": "063c0cc57e8d6c41acbaf2a9088717f7adb2f229d66045e832c7c5a6fd86833b"
   },
   "sizes": {
-    "macos-aarch64": 5857340,
-    "macos-x86_64": 6455676,
-    "windows-x86_64": 4463550
+    "macos-aarch64": 5870152,
+    "macos-x86_64": 6471244,
+    "windows-x86_64": 4477286
   }
 }

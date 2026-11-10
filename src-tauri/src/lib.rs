@@ -1770,6 +1770,26 @@ async fn lan_set_name(name: String) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+async fn lan_set_privacy(
+    private: bool,
+    allowed_ids: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        lan_request(
+            "POST",
+            "/__ddb/lan/privacy",
+            Some(serde_json::json!({
+                "private": private,
+                "allowedIds": allowed_ids,
+            })),
+            Duration::from_secs(5),
+        )
+    })
+    .await
+    .map_err(|error| format!("保存隐身设置失败: {error}"))?
+}
+
+#[tauri::command]
 async fn lan_add_peer(ip: String) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
         lan_request(
@@ -2173,6 +2193,7 @@ pub fn run() {
             lan_snapshot,
             lan_restart,
             lan_set_name,
+            lan_set_privacy,
             lan_add_peer,
             lan_send_message,
             lan_send_files,

@@ -77,11 +77,14 @@ const lanSelfName = document.getElementById("lanSelfName");
 const lanSelfIp = document.getElementById("lanSelfIp");
 const lanDiscovery = document.getElementById("lanDiscovery");
 const lanVersion = document.getElementById("lanVersion");
+const lanPrivacyBtn = document.getElementById("lanPrivacyBtn");
+const lanPrivacyState = document.getElementById("lanPrivacyState");
 const lanPermissionBtn = document.getElementById("lanPermissionBtn");
 const lanRenameBtn = document.getElementById("lanRenameBtn");
 const lanRefreshBtn = document.getElementById("lanRefreshBtn");
 const lanPeerCount = document.getElementById("lanPeerCount");
 const lanPeerList = document.getElementById("lanPeerList");
+const lanPeerSearch = document.getElementById("lanPeerSearch");
 const lanAddIp = document.getElementById("lanAddIp");
 const lanAddBtn = document.getElementById("lanAddBtn");
 const lanDiscoveryHint = document.getElementById("lanDiscoveryHint");
@@ -105,6 +108,17 @@ const lanPermissionStepSettings = document.getElementById("lanPermissionStepSett
 const lanPermissionStatus = document.getElementById("lanPermissionStatus");
 const lanPermissionStatusTitle = document.getElementById("lanPermissionStatusTitle");
 const lanPermissionStatusText = document.getElementById("lanPermissionStatusText");
+const lanPrivacyModal = document.getElementById("lanPrivacyModal");
+const lanPrivacyClose = document.getElementById("lanPrivacyClose");
+const lanPrivacyDialog = lanPrivacyModal.querySelector(".lan-privacy-dialog");
+const lanPrivacyEnabled = document.getElementById("lanPrivacyEnabled");
+const lanPrivacyNote = document.getElementById("lanPrivacyNote");
+const lanPrivacySearch = document.getElementById("lanPrivacySearch");
+const lanPrivacyList = document.getElementById("lanPrivacyList");
+const lanPrivacySelectedCount = document.getElementById("lanPrivacySelectedCount");
+const lanPrivacyTip = document.getElementById("lanPrivacyTip");
+const lanPrivacyCancel = document.getElementById("lanPrivacyCancel");
+const lanPrivacySave = document.getElementById("lanPrivacySave");
 const lanDropOverlay = document.getElementById("lanDropOverlay");
 const lanDropTitle = document.getElementById("lanDropTitle");
 const lanDropHint = document.getElementById("lanDropHint");
@@ -133,7 +147,7 @@ let updateBusy = false;
 let updateInstallBusy = false;
 let updateInstallLink = null;
 let updateSource = readStorage("dualdns.updateSource", "auto");
-let currentVersion = "1.2.2";
+let currentVersion = "1.2.3";
 let currentPlatformLabel = "";
 let dismissedUpdate = readStorage("dualdns.dismissedUpdate", "");
 let currentView = "browser";
@@ -144,6 +158,12 @@ let lanSelectedPeerId = "";
 let lanActionBusy = false;
 let lanRenameEditing = false;
 let lanRenameOriginal = "";
+let lanPeerQuery = "";
+let lanPrivacyReturnFocus = null;
+let lanPrivacyDraftPrivate = false;
+let lanPrivacyDraftAllowed = new Set();
+let lanPrivacyQuery = "";
+let lanPrivacySaving = false;
 let lanSeenAttention = new Set();
 let lanAttentionPrimed = false;
 let lanAttentionCount = 0;
@@ -305,7 +325,10 @@ function closeHelp() {
 function syncModalLock() {
   document.body.classList.toggle(
     "help-open",
-    !helpModal.hidden || !updateModal.hidden || !lanPermissionModal.hidden,
+    !helpModal.hidden
+      || !updateModal.hidden
+      || !lanPermissionModal.hidden
+      || !lanPrivacyModal.hidden,
   );
 }
 
@@ -319,6 +342,7 @@ function trapModalFocus(event, modal, dialog) {
     event.preventDefault();
     if (modal === updateModal) closeUpdates();
     else if (modal === lanPermissionModal) closeLanPermission();
+    else if (modal === lanPrivacyModal) closeLanPrivacy();
     else closeHelp();
     return;
   }
@@ -859,6 +883,17 @@ function lanPlatformLabel(platform) {
   return platform || "未知系统";
 }
 
+function lanPeerMatches(peer, query) {
+  const term = String(query || "").trim().toLowerCase();
+  if (!term) return true;
+  return [
+    peer?.name,
+    peer?.ip,
+    peer?.platform,
+    lanPlatformLabel(peer?.platform),
+  ].some((value) => String(value || "").toLowerCase().includes(term));
+}
+
 function formatLanTime(value) {
   const date = new Date(Number(value) || 0);
   if (Number.isNaN(date.getTime()) || date.getTime() <= 0) return "";
@@ -916,11 +951,15 @@ function syncLanAttention(data) {
 function renderLanTargets() {
   const peer = selectedLanPeer();
   const target = peer ? `发给 ${peer.name}` : "未选择同事";
+  const privateMode = Boolean(lanSnapshotData?.privacy?.enabled);
   lanComposerTo.textContent = target;
   lanFileTo.textContent = target;
   lanSendMessage.disabled = !peer || lanActionBusy;
   lanPickFiles.disabled = !peer || lanActionBusy;
-  lanAddBtn.disabled = lanActionBusy;
+  lanAddIp.disabled = privateMode;
+  lanAddBtn.disabled = lanActionBusy || privateMode;
+  lanAddBtn.title = privateMode ? "开启隐身模式时不能手动添加新设备" : "";
+  lanAddIp.title = privateMode ? "先关闭隐身模式，再添加新的设备" : "";
   lanRenameBtn.disabled = lanActionBusy;
 }
 
@@ -945,20 +984,36 @@ function renderLanPeers(peers) {
     lanMessageSignature = "";
   }
   const online = peers.filter((peer) => peer.online).length;
-  lanPeerCount.textContent = `${online} 台在线 · 共 ${peers.length} 台`;
+  const filtered = peers.filter((peer) => lanPeerMatches(peer, lanPeerQuery));
+  lanPeerCount.textContent = lanPeerQuery.trim()
+    ? `${online} 台在线 · 匹配 ${filtered.length} / ${peers.length} 台`
+    : `${online} 台在线 · 共 ${peers.length} 台`;
   lanPeerList.textContent = "";
 
   if (peers.length === 0) {
+    const hiddenMode = Boolean(lanSnapshotData?.privacy?.enabled);
     lanPeerList.appendChild(lanElement(
       "div",
       "lan-empty",
-      "还没有发现同事。请确认对方也打开了本应用，并连接同一个 Wi-Fi / 局域网。",
+      hiddenMode
+        ? "当前是隐身上线状态，名单内暂时没有可见的电脑。可在“隐身模式”里调整名单，或先关闭隐身发现新设备。"
+        : "还没有发现同事。请确认对方也打开了本应用，并连接同一个 Wi-Fi / 局域网。",
     ));
     renderLanTargets();
     return;
   }
 
-  peers.forEach((peer) => {
+  if (filtered.length === 0) {
+    lanPeerList.appendChild(lanElement(
+      "div",
+      "lan-empty",
+      `没有匹配“${lanPeerQuery.trim()}”的电脑。试试搜索名称、IP 或系统。`,
+    ));
+    renderLanTargets();
+    return;
+  }
+
+  filtered.forEach((peer) => {
     const selected = peer.id === lanSelectedPeerId;
     const row = lanElement("div", `lan-peer${selected ? " selected" : ""}${peer.online ? "" : " offline"}`);
     row.tabIndex = 0;
@@ -1009,6 +1064,180 @@ function renderLanPeers(peers) {
     lanPeerList.appendChild(row);
   });
   renderLanTargets();
+}
+
+function renderLanPrivacyState() {
+  const privacy = lanSnapshotData?.privacy || {};
+  const enabled = Boolean(privacy.enabled);
+  const count = Array.isArray(privacy.allowedIds) ? privacy.allowedIds.length : 0;
+  lanPrivacyState.hidden = !enabled;
+  lanPrivacyState.textContent = enabled
+    ? count > 0 ? `隐身上线 · 仅 ${count} 台可见` : "隐身上线 · 所有人不可见"
+    : "";
+  lanPrivacyState.title = enabled
+    ? "其他同事无法发现你。只有可见名单中的电脑能给你发消息或传文件。"
+    : "";
+  lanPrivacyBtn.classList.toggle("active", enabled);
+  lanPrivacyBtn.textContent = enabled ? "隐身上线" : "隐身模式";
+  lanPrivacyBtn.title = enabled
+    ? `隐身模式已开启，${count} 台电脑可见`
+    : "设置哪些电脑可以发现你";
+}
+
+function renderLanPrivacyUi() {
+  lanPrivacyEnabled.checked = lanPrivacyDraftPrivate;
+  lanPrivacyNote.classList.toggle("enabled", lanPrivacyDraftPrivate);
+  lanPrivacyNote.textContent = lanPrivacyDraftPrivate
+    ? "保存后进入隐身上线：未勾选的电脑将无法发现你。隐身只限制应用层发现和连接，不加密传输内容。"
+    : "当前为正常上线状态。可见名单会保存，但只有打开隐身模式后才会生效。";
+  const count = lanPrivacyDraftAllowed.size;
+  lanPrivacySelectedCount.textContent = `已选择 ${count} 台`;
+  lanPrivacyTip.textContent = lanPrivacyDraftPrivate && count === 0
+    ? "未选择任何电脑时保存，将对所有同事隐身，直到你重新关闭隐身模式。"
+    : "想在自己的两台电脑之间互传：先让两台电脑正常发现对方，再把对方加入这里的可见名单，最后开启隐身。";
+}
+
+function renderLanPrivacyList() {
+  const peers = Array.isArray(lanSnapshotData?.peers) ? lanSnapshotData.peers : [];
+  const filtered = peers.filter((peer) => lanPeerMatches(peer, lanPrivacyQuery));
+  lanPrivacyList.textContent = "";
+
+  if (peers.length === 0) {
+    lanPrivacyList.appendChild(lanElement(
+      "div",
+      "lan-empty",
+      lanSnapshotData?.privacy?.enabled
+        ? "当前名单为空。关闭隐身模式并发现其他电脑后，再回来设置可见范围。"
+        : "还没有发现其他电脑。先让两台电脑正常出现在在线同事列表，再回来勾选。",
+    ));
+    return;
+  }
+
+  if (filtered.length === 0) {
+    lanPrivacyList.appendChild(lanElement(
+      "div",
+      "lan-empty",
+      `没有匹配“${lanPrivacyQuery.trim()}”的电脑。`,
+    ));
+    return;
+  }
+
+  filtered.forEach((peer) => {
+    const checked = lanPrivacyDraftAllowed.has(peer.id);
+    const row = lanElement("label", `lan-privacy-device${checked ? " checked" : ""}`);
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = checked;
+    input.disabled = lanPrivacySaving;
+    input.addEventListener("change", () => {
+      if (input.checked) {
+        lanPrivacyDraftAllowed.add(peer.id);
+      } else {
+        lanPrivacyDraftAllowed.delete(peer.id);
+      }
+      row.classList.toggle("checked", input.checked);
+      renderLanPrivacyUi();
+    });
+
+    const main = lanElement("span", "lan-privacy-device-main");
+    main.appendChild(lanElement("strong", "", peer.name || "未命名电脑"));
+    const detail = [peer.ip || "IP 未知"];
+    if (peer.platform) detail.push(lanPlatformLabel(peer.platform));
+    main.appendChild(lanElement("span", "", detail.join(" · ")));
+    const status = lanElement(
+      "span",
+      `lan-privacy-device-status${peer.online ? "" : " offline"}`,
+      peer.online ? "在线" : "离线",
+    );
+    row.append(input, main, status);
+    lanPrivacyList.appendChild(row);
+  });
+}
+
+function openLanPrivacy() {
+  if (!lanPrivacyModal.hidden) return;
+  const privacy = lanSnapshotData?.privacy || {};
+  lanPrivacyDraftPrivate = Boolean(privacy.enabled);
+  lanPrivacyDraftAllowed = new Set(
+    Array.isArray(privacy.allowedIds) ? privacy.allowedIds.filter(Boolean) : [],
+  );
+  lanPrivacyQuery = "";
+  lanPrivacySearch.value = "";
+  lanPrivacySaving = false;
+  lanPrivacySave.disabled = false;
+  lanPrivacyCancel.disabled = false;
+  lanPrivacySave.textContent = "保存设置";
+  renderLanPrivacyUi();
+  renderLanPrivacyList();
+  lanPrivacyReturnFocus = document.activeElement;
+  lanPrivacyModal.hidden = false;
+  syncModalLock();
+  window.requestAnimationFrame(() => lanPrivacyDialog.focus());
+}
+
+function closeLanPrivacy() {
+  if (lanPrivacyModal.hidden || lanPrivacySaving) return;
+  lanPrivacyModal.hidden = true;
+  syncModalLock();
+  if (lanPrivacyReturnFocus instanceof HTMLElement) {
+    lanPrivacyReturnFocus.focus();
+  } else {
+    lanPrivacyBtn.focus();
+  }
+  lanPrivacyReturnFocus = null;
+}
+
+async function saveLanPrivacy() {
+  if (lanPrivacySaving) return;
+  if (!invoke) {
+    showToast("当前为界面预览模式，桌面应用中才能设置隐身模式", "error");
+    return;
+  }
+  if (
+    lanPrivacyDraftPrivate
+    && lanPrivacyDraftAllowed.size === 0
+    && !window.confirm("没有选择任何可见电脑。保存后所有同事都无法发现你，确定继续吗？")
+  ) {
+    return;
+  }
+
+  lanPrivacySaving = true;
+  lanPrivacyEnabled.disabled = true;
+  lanPrivacySearch.disabled = true;
+  lanPrivacyCancel.disabled = true;
+  lanPrivacySave.disabled = true;
+  lanPrivacySave.textContent = "保存中…";
+  try {
+    const result = await invoke("lan_set_privacy", {
+      private: lanPrivacyDraftPrivate,
+      allowedIds: Array.from(lanPrivacyDraftAllowed),
+    });
+    if (result?.snapshot) renderLanSnapshot(result.snapshot);
+    lanPrivacySaving = false;
+    lanPrivacyModal.hidden = true;
+    syncModalLock();
+    showToast(
+      lanPrivacyDraftPrivate
+        ? `已进入隐身上线 · ${lanPrivacyDraftAllowed.size} 台可见`
+        : "已关闭隐身模式",
+      "success",
+    );
+    if (lanPrivacyReturnFocus instanceof HTMLElement) {
+      lanPrivacyReturnFocus.focus();
+    } else {
+      lanPrivacyBtn.focus();
+    }
+    lanPrivacyReturnFocus = null;
+  } catch (error) {
+    showToast(friendlyError(error), "error");
+    lanPrivacySaving = false;
+    lanPrivacySave.disabled = false;
+    lanPrivacySave.textContent = "保存设置";
+  } finally {
+    lanPrivacyEnabled.disabled = false;
+    lanPrivacySearch.disabled = false;
+    lanPrivacyCancel.disabled = false;
+  }
 }
 
 function renderLanMessages(messages) {
@@ -1197,6 +1426,7 @@ function renderLanSnapshot(data) {
     ? ""
     : `${self.discoveryMessage || "自动发现不可用"}。仍可让同事把 IP 发给你，在下方手动添加。`;
 
+  renderLanPrivacyState();
   renderLanPeers(Array.isArray(data.peers) ? data.peers : []);
   renderLanMessages(Array.isArray(data.messages) ? data.messages : []);
   renderLanFiles(data.incoming, data.outgoing);
@@ -1773,6 +2003,28 @@ lanSelfName.addEventListener("keydown", (event) => {
   }
 });
 lanRefreshBtn.addEventListener("click", () => refreshLan({ silent: false, manual: true }));
+lanPeerSearch.addEventListener("input", () => {
+  lanPeerQuery = lanPeerSearch.value;
+  renderLanPeers(Array.isArray(lanSnapshotData?.peers) ? lanSnapshotData.peers : []);
+});
+lanPrivacyBtn.addEventListener("click", openLanPrivacy);
+lanPrivacyClose.addEventListener("click", closeLanPrivacy);
+lanPrivacyCancel.addEventListener("click", closeLanPrivacy);
+lanPrivacyModal.addEventListener("click", (event) => {
+  if (event.target === lanPrivacyModal) closeLanPrivacy();
+});
+lanPrivacyModal.addEventListener("keydown", (event) => {
+  trapModalFocus(event, lanPrivacyModal, lanPrivacyDialog);
+});
+lanPrivacyEnabled.addEventListener("change", () => {
+  lanPrivacyDraftPrivate = lanPrivacyEnabled.checked;
+  renderLanPrivacyUi();
+});
+lanPrivacySearch.addEventListener("input", () => {
+  lanPrivacyQuery = lanPrivacySearch.value;
+  renderLanPrivacyList();
+});
+lanPrivacySave.addEventListener("click", saveLanPrivacy);
 lanPermissionBtn.addEventListener("click", openLanPermission);
 lanAddBtn.addEventListener("click", addLanPeer);
 lanAddIp.addEventListener("keydown", (event) => {
@@ -1844,7 +2096,12 @@ updateRelease.addEventListener("click", () => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (!helpModal.hidden || !updateModal.hidden || !lanPermissionModal.hidden) return;
+  if (
+    !helpModal.hidden
+    || !updateModal.hidden
+    || !lanPermissionModal.hidden
+    || !lanPrivacyModal.hidden
+  ) return;
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
     event.preventDefault();
     openBothEnvs();

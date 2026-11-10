@@ -3,6 +3,7 @@ package lan
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -101,6 +102,8 @@ type beacon struct {
 	Token    string `json:"token"`
 	Release  string `json:"release"`
 	Platform string `json:"platform"`
+	Private  bool   `json:"private,omitempty"`
+	Audience string `json:"audience,omitempty"`
 }
 
 type health struct {
@@ -134,6 +137,21 @@ type deviceFile struct {
 	Token string `json:"token"`
 }
 
+type allowedPeer struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	IP       string `json:"ip"`
+	Port     int    `json:"port"`
+	Token    string `json:"token"`
+	Version  string `json:"version"`
+	Platform string `json:"platform"`
+}
+
+type privacyFile struct {
+	Private bool          `json:"private"`
+	Allowed []allowedPeer `json:"allowed"`
+}
+
 type Service struct {
 	dataDir       string
 	httpPort      int
@@ -152,6 +170,8 @@ type Service struct {
 	allIPs       []string
 	discovery    bool
 	discoveryMsg string
+	private      bool
+	allowed      map[string]allowedPeer
 
 	client   *http.Client
 	server   *http.Server
@@ -215,6 +235,7 @@ func newService(dataDir string, httpPort, discoveryPort int, version string) (*S
 		peers:         make(map[string]*peer),
 		outgoing:      make(map[string]*outgoing),
 		incoming:      make(map[string]*incoming),
+		allowed:       make(map[string]allowedPeer),
 		stopCh:        make(chan struct{}),
 		discoveryMsg:  discoveryDisabled,
 	}
@@ -234,6 +255,9 @@ func newService(dataDir string, httpPort, discoveryPort int, version string) (*S
 	}
 
 	if err := svc.loadIdentity(); err != nil {
+		return nil, err
+	}
+	if err := svc.loadPrivacy(); err != nil {
 		return nil, err
 	}
 	svc.allIPs, svc.selfIP = localIPv4s()
@@ -269,6 +293,79 @@ func (s *Service) loadIdentity() error {
 		return writeJSONFile(path, device)
 	}
 	return nil
+}
+
+func (s *Service) loadPrivacy() error {
+	path := filepath.Join(s.dataDir, "privacy.json")
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var saved privacyFile
+	if err := json.Unmarshal(data, &saved); err != nil {
+		return nil
+	}
+	now := time.Now().UnixMilli()
+	for _, entry := range saved.Allowed {
+		entry.ID = strings.TrimSpace(entry.ID)
+		entry.Token = strings.TrimSpace(entry.Token)
+		if !validID(entry.ID) || entry.ID == s.id || len(entry.Token) != 32 {
+			continue
+		}
+		entry.Name = cleanName(entry.Name)
+		if entry.Name == "" {
+			entry.Name = "同事"
+		}
+		if net.ParseIP(entry.IP) == nil || entry.Port < 1024 || entry.Port > 65535 {
+			continue
+		}
+		if _, exists := s.allowed[entry.ID]; exists {
+			continue
+		}
+		s.allowed[entry.ID] = entry
+		if _, exists := s.peers[entry.ID]; !exists {
+			s.peers[entry.ID] = &peer{
+				ID:       entry.ID,
+				Name:     entry.Name,
+				IP:       entry.IP,
+				Port:     entry.Port,
+				Token:    entry.Token,
+				Version:  entry.Version,
+				Platform: entry.Platform,
+				LastSeen: now,
+				Manual:   true,
+				Online:   false,
+			}
+		}
+	}
+	s.private = saved.Private
+	return nil
+}
+
+func (s *Service) privacyFileLocked() privacyFile {
+	allowed := make([]allowedPeer, 0, len(s.allowed))
+	for _, entry := range s.allowed {
+		allowed = append(allowed, entry)
+	}
+	sort.Slice(allowed, func(i, j int) bool {
+		return strings.ToLower(allowed[i].Name) < strings.ToLower(allowed[j].Name)
+	})
+	return privacyFile{Private: s.private, Allowed: allowed}
+}
+
+func allowedFromPeer(item *peer) allowedPeer {
+	return allowedPeer{
+		ID:       item.ID,
+		Name:     item.Name,
+		IP:       item.IP,
+		Port:     item.Port,
+		Token:    item.Token,
+		Version:  item.Version,
+		Platform: item.Platform,
+	}
 }
 
 func (s *Service) start() error {
@@ -312,6 +409,7 @@ func (s *Service) routes() http.Handler {
 	mux.HandleFunc("/__ddb/lan/register", s.handleRegister)
 	mux.HandleFunc("/__ddb/lan/snapshot", s.handleSnapshot)
 	mux.HandleFunc("/__ddb/lan/name", s.handleName)
+	mux.HandleFunc("/__ddb/lan/privacy", s.handlePrivacy)
 	mux.HandleFunc("/__ddb/lan/add-peer", s.handleAddPeer)
 	mux.HandleFunc("/__ddb/lan/message", s.handleSendMessage)
 	mux.HandleFunc("/__ddb/lan/send", s.handleSendFile)
@@ -343,6 +441,7 @@ func controlPath(path string) bool {
 	switch path {
 	case "/__ddb/lan/snapshot",
 		"/__ddb/lan/name",
+		"/__ddb/lan/privacy",
 		"/__ddb/lan/add-peer",
 		"/__ddb/lan/message",
 		"/__ddb/lan/send",
@@ -370,6 +469,10 @@ func (s *Service) handleHealth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "只支持 GET")
 		return
 	}
+	if !s.healthVisibleTo(r) {
+		writeError(w, http.StatusNotFound, "设备当前不可见")
+		return
+	}
 	s.mu.RLock()
 	body := health{
 		OK:       true,
@@ -384,6 +487,21 @@ func (s *Service) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.RUnlock()
 	writeJSON(w, http.StatusOK, body)
+}
+
+func (s *Service) healthVisibleTo(r *http.Request) bool {
+	if isLoopbackRemote(r.RemoteAddr) {
+		return true
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.private {
+		return true
+	}
+	id := strings.TrimSpace(r.Header.Get("X-DDB-Peer-Id"))
+	token := strings.TrimSpace(r.Header.Get("X-DDB-Peer-Token"))
+	entry, ok := s.allowed[id]
+	return ok && tokenEqual(entry.Token, token)
 }
 
 func (s *Service) handleRegister(w http.ResponseWriter, r *http.Request) {
@@ -402,10 +520,10 @@ func (s *Service) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	source := net.ParseIP(strings.Trim(host, "[]"))
 	if ok, _ := s.absorbBeacon(item, source); !ok {
-		writeError(w, http.StatusBadRequest, "注册信息无效")
+		writeError(w, http.StatusNotFound, "设备当前不可见或注册信息无效")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.ownBeacon())
+	writeJSON(w, http.StatusOK, s.ownBeaconFor(item.ID))
 }
 
 func (s *Service) handleSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -433,10 +551,24 @@ func (s *Service) snapshot() map[string]any {
 	}
 	peers := make([]peer, 0, len(s.peers))
 	for _, item := range s.peers {
+		if s.private {
+			if _, allowed := s.allowed[item.ID]; !allowed {
+				continue
+			}
+		}
 		copyItem := *item
 		copyItem.Online = now-copyItem.LastSeen < peerOnlineWindow.Milliseconds()
 		copyItem.Token = ""
 		peers = append(peers, copyItem)
+	}
+	allowedIDs := make([]string, 0, len(s.allowed))
+	for id := range s.allowed {
+		allowedIDs = append(allowedIDs, id)
+	}
+	sort.Strings(allowedIDs)
+	privacy := map[string]any{
+		"enabled":    s.private,
+		"allowedIds": allowedIDs,
 	}
 	messagesOut := append([]message(nil), s.messages...)
 	outgoingOut := make([]outgoing, 0, len(s.outgoing))
@@ -468,6 +600,7 @@ func (s *Service) snapshot() map[string]any {
 		"ok":       true,
 		"self":     self,
 		"peers":    peers,
+		"privacy":  privacy,
 		"messages": messagesOut,
 		"outgoing": outgoingOut,
 		"incoming": incomingOut,
@@ -502,9 +635,107 @@ func (s *Service) handleName(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "snapshot": s.snapshot()})
 }
 
+func (s *Service) handlePrivacy(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		s.mu.RLock()
+		privacy := map[string]any{
+			"enabled":    s.private,
+			"allowedIds": allowedIDsLocked(s.allowed),
+		}
+		s.mu.RUnlock()
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "privacy": privacy})
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "只支持 GET 或 POST")
+		return
+	}
+	var body struct {
+		Private    bool     `json:"private"`
+		AllowedIDs []string `json:"allowedIds"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	seen := make(map[string]bool)
+	nextAllowed := make([]allowedPeer, 0, len(body.AllowedIDs))
+	s.mu.RLock()
+	for _, rawID := range body.AllowedIDs {
+		id := strings.TrimSpace(rawID)
+		if !validID(id) || id == s.id || seen[id] {
+			continue
+		}
+		seen[id] = true
+		if item, ok := s.peers[id]; ok && len(item.Token) == 32 && item.IP != "" && item.Port > 0 {
+			nextAllowed = append(nextAllowed, allowedFromPeer(item))
+			continue
+		}
+		if item, ok := s.allowed[id]; ok {
+			nextAllowed = append(nextAllowed, item)
+			continue
+		}
+
+	}
+	s.mu.RUnlock()
+	if len(nextAllowed) != len(seen) {
+		writeError(w, http.StatusBadRequest, "名单中有设备信息已失效，请刷新后重新选择")
+		return
+	}
+
+	saved := privacyFile{Private: body.Private, Allowed: nextAllowed}
+	data, err := json.MarshalIndent(saved, "", "  ")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "保存隐身设置失败")
+		return
+	}
+	if err := writeFileAtomic(filepath.Join(s.dataDir, "privacy.json"), append(data, '\n')); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.mu.Lock()
+	s.private = body.Private
+	s.allowed = make(map[string]allowedPeer, len(nextAllowed))
+	for _, item := range nextAllowed {
+		s.allowed[item.ID] = item
+		if _, exists := s.peers[item.ID]; !exists {
+			s.peers[item.ID] = &peer{
+				ID:       item.ID,
+				Name:     item.Name,
+				IP:       item.IP,
+				Port:     item.Port,
+				Token:    item.Token,
+				Version:  item.Version,
+				Platform: item.Platform,
+				Manual:   true,
+			}
+		}
+	}
+	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "snapshot": s.snapshot()})
+}
+
+func allowedIDsLocked(allowed map[string]allowedPeer) []string {
+	ids := make([]string, 0, len(allowed))
+	for id := range allowed {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 func (s *Service) handleAddPeer(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "只支持 POST")
+		return
+	}
+	s.mu.RLock()
+	isPrivate := s.private
+	s.mu.RUnlock()
+	if isPrivate {
+		writeError(w, http.StatusBadRequest, "请先关闭隐身模式，再添加新的设备")
 		return
 	}
 	var body struct {
@@ -629,6 +860,10 @@ func (s *Service) handleIncomingMessage(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "消息格式不正确")
 		return
 	}
+	if !s.canReceiveFrom(body.FromID, strings.TrimSpace(body.FromToken)) {
+		writeError(w, http.StatusForbidden, "发送方不在本机的可见名单中")
+		return
+	}
 	if len([]rune(text)) > maxMessageRunes {
 		writeError(w, http.StatusBadRequest, "消息过长")
 		return
@@ -725,6 +960,9 @@ func (s *Service) findPeer(peerID string) (peer, error) {
 	}
 	s.mu.RLock()
 	item, ok := s.peers[peerID]
+	if ok && s.private {
+		_, ok = s.allowed[peerID]
+	}
 	if ok {
 		copyItem := *item
 		s.mu.RUnlock()
@@ -745,11 +983,18 @@ func (s *Service) probePeer(host string, port int) (*peer, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.mu.RLock()
+	req.Header.Set("X-DDB-Peer-Id", s.id)
+	req.Header.Set("X-DDB-Peer-Token", s.token)
+	s.mu.RUnlock()
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("连不上 %s:%d，请确认对方已打开本应用，或局域网防火墙允许访问", host, port)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New("无法发现对方。若对方已开启隐身模式，请先让对方向本机开放可见权限")
+	}
 	var body health
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&body); err != nil {
 		return nil, fmt.Errorf("%s:%d 不是 DualDNS 局域网服务", host, port)
@@ -778,6 +1023,23 @@ func (s *Service) authorized(r *http.Request) bool {
 	token := s.token
 	s.mu.RUnlock()
 	return r.Header.Get("X-DDB-Token") == token && r.Header.Get("X-DDB-App") == appTag
+}
+
+func (s *Service) canReceiveFrom(id, token string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.private {
+		return true
+	}
+	entry, ok := s.allowed[id]
+	return ok && tokenEqual(entry.Token, token)
+}
+
+func tokenEqual(expected, actual string) bool {
+	if len(expected) != len(actual) || len(expected) == 0 {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(actual)) == 1
 }
 
 func (s *Service) postToPeer(target peer, path string, payload []byte, timeout time.Duration) error {
@@ -855,6 +1117,9 @@ func (s *Service) absorbBeacon(item beacon, source net.IP) (bool, bool) {
 	if item.App != appTag || item.Version != protoVersion || !validID(item.ID) || item.ID == s.id {
 		return false, false
 	}
+	if item.Private && item.Audience != "" && item.Audience != s.id {
+		return false, false
+	}
 	if item.Port < 1024 || item.Port > 65535 {
 		return false, false
 	}
@@ -868,6 +1133,12 @@ func (s *Service) absorbBeacon(item beacon, source net.IP) (bool, bool) {
 	now := time.Now().UnixMilli()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.private {
+		allowed, ok := s.allowed[item.ID]
+		if !ok || !tokenEqual(allowed.Token, item.Token) {
+			return false, false
+		}
+	}
 	if _, exists := s.peers[item.ID]; !exists && len(s.peers) >= maxPeers {
 		return false, false
 	}
@@ -911,26 +1182,39 @@ func (s *Service) beaconLoop() {
 }
 
 func (s *Service) broadcast() {
-	item := s.ownBeacon()
+	s.mu.RLock()
+	private := s.private
+	targets := make([]allowedPeer, 0, len(s.allowed))
+	if private {
+		for _, entry := range s.allowed {
+			targets = append(targets, entry)
+		}
+	}
+	s.mu.RUnlock()
+	if private {
+		for _, entry := range targets {
+			item := s.ownBeaconFor(entry.ID)
+			if item.IP == "" || net.ParseIP(entry.IP) == nil || entry.Port < 1024 {
+				continue
+			}
+			s.sendBeaconUDP(net.ParseIP(entry.IP), item)
+		}
+		return
+	}
+	item := s.ownBeaconFor("")
 	if item.IP == "" {
 		return
 	}
-	data, err := json.Marshal(item)
-	if err != nil {
-		return
-	}
 	for _, target := range broadcastTargets() {
-		conn, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: target, Port: s.discoveryPort})
-		if err != nil {
-			continue
-		}
-		_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-		_, _ = conn.Write(data)
-		_ = conn.Close()
+		s.sendBeaconUDP(target, item)
 	}
 }
 
 func (s *Service) ownBeacon() beacon {
+	return s.ownBeaconFor("")
+}
+
+func (s *Service) ownBeaconFor(audience string) beacon {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return beacon{
@@ -943,7 +1227,23 @@ func (s *Service) ownBeacon() beacon {
 		Token:    s.token,
 		Release:  s.appVersion,
 		Platform: runtime.GOOS,
+		Private:  s.private,
+		Audience: audience,
 	}
+}
+
+func (s *Service) sendBeaconUDP(target net.IP, item beacon) {
+	data, err := json.Marshal(item)
+	if err != nil {
+		return
+	}
+	conn, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: target, Port: s.discoveryPort})
+	if err != nil {
+		return
+	}
+	_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	_, _ = conn.Write(data)
+	_ = conn.Close()
 }
 
 func (s *Service) peerBeacon(id, name, ip string, port int, token, release, platform string) beacon {
@@ -967,20 +1267,12 @@ func (s *Service) registerPeer(target beacon) {
 	if target.Port < 1024 || target.Port > 65535 || net.ParseIP(target.IP) == nil {
 		return
 	}
-	payload, err := json.Marshal(s.ownBeacon())
+	payload, err := json.Marshal(s.ownBeaconFor(target.ID))
 	if err != nil {
 		return
 	}
 
-	udp, err := net.DialUDP("udp4", nil, &net.UDPAddr{
-		IP:   net.ParseIP(target.IP),
-		Port: s.discoveryPort,
-	})
-	if err == nil {
-		_ = udp.SetWriteDeadline(time.Now().Add(1500 * time.Millisecond))
-		_, _ = udp.Write(payload)
-		_ = udp.Close()
-	}
+	s.sendBeaconUDP(net.ParseIP(target.IP), s.ownBeaconFor(target.ID))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()

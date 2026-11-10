@@ -239,6 +239,10 @@ func (s *Service) handleIncomingFile(w http.ResponseWriter, r *http.Request) {
 	fromIP := strings.TrimSpace(r.Header.Get("X-DDB-From-Ip"))
 	fromRelease := strings.TrimSpace(r.Header.Get("X-DDB-From-Release"))
 	fromPlatform := strings.TrimSpace(r.Header.Get("X-DDB-From-Platform"))
+	if !s.canReceiveFrom(fromID, fromToken) {
+		writeError(w, http.StatusForbidden, "发送方不在本机的可见名单中")
+		return
+	}
 	if s.rememberSender(r, fromID, fromName, fromIP, fromPort, fromToken, fromRelease, fromPlatform) {
 		go s.registerPeer(s.peerBeacon(fromID, fromName, fromIP, fromPort, fromToken, fromRelease, fromPlatform))
 	}

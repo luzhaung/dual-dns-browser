@@ -91,6 +91,8 @@ updates/          Gitee / GitHub 更新清单
 
 “局域网快传”页签可以在同一 Wi-Fi / 局域网内发现正在运行本应用的电脑，并发送短消息或文件。发现使用 UDP `18191`，消息和文件传输使用 TCP `18190`；双方需要在同一可互访网络，Windows 首次询问防火墙权限时请允许专用网络。
 
+在线同事列表固定高度并独立滚动，支持按名称、IP 或系统搜索。隐身模式可以只允许指定电脑发现自己，适合在自己的两台电脑之间互传；隐身是应用层访问控制，不加密局域网流量。
+
 收到的文件会先暂存，接收方点“保存”后才写入 `Downloads/DualDNS Transfers`。单个文件最大 2 GB。局域网传输使用本机 HTTP 协议，没有端到端加密，请只在可信网络使用。
 
 设备和消息仅在本机与局域网内的同事电脑之间传输，不上传 Gitee、GitHub 或任何云端服务。控制接口只监听并接受本机请求，局域网内只开放发现、消息投递和文件投递所需接口。
@@ -99,10 +101,10 @@ updates/          Gitee / GitHub 更新清单
 
 ```json
 {
-  "version": "1.2.2",
+  "version": "1.2.3",
   "published_at": "2026-11-05T12:00:00Z",
   "notes": "更新内容",
-  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.2.2",
+  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.2.3",
   "downloads": {
     "macos-aarch64": "https://example.com/apple.dmg",
     "macos-x86_64": "https://example.com/intel.dmg",

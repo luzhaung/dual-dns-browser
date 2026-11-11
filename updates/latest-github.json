@@ -1,21 +1,21 @@
 {
-  "version": "1.2.7",
-  "published_at": "2026-11-11T10:46:41.310Z",
-  "notes": "## v1.2.7\n\n优化界面主题和局域网快传的日常操作。\n\n- 新增夜间模式：默认跟随系统外观，右上角的月亮 / 太阳按钮可手动切换，选择会自动记住。\n- 修改本机名称不再需要点“保存”：点击“修改名称”直接进入输入框，失去焦点或按 Enter 自动保存，按 Esc 取消。\n- 在线电脑和消息区域滚动到底后，滚轮会继续带动整页滚动，不再出现“滚不动”的错觉。\n- “在线同事”文案统一改为“在线电脑”。\n- 更新使用说明和 README。",
-  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.2.7",
+  "version": "1.2.8",
+  "published_at": "2026-11-11T11:14:51.433Z",
+  "notes": "## v1.2.8\n\n优化夜间模式下的状态辨识度。\n\n- 修复夜间模式下浏览器、DNS 代理和版本状态的小圆点显示成灰色的问题，启用、警告状态现在恢复为清晰的绿色和橙色。\n- 修复夜间模式下“隐身模式”开关开启后仍像关闭状态的问题，开启后显示明显的蓝色高亮。\n- 增强夜间模式下“内外网浏览器 / 局域网快传”页签选中态，增加蓝色底色和描边，更容易区分当前页面。\n- 同步修复 DNS 输入框改动标记在夜间模式下颜色不明显的问题。",
+  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.2.8",
   "downloads": {
-    "macos-aarch64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.2.7/DualDNS-Browser-1.2.7-macOS-AppleSilicon.dmg",
-    "macos-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.2.7/DualDNS-Browser-1.2.7-macOS-Intel.dmg",
-    "windows-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.2.7/DualDNS-Browser-1.2.7-Windows-x64-Setup.exe"
+    "macos-aarch64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.2.8/DualDNS-Browser-1.2.8-macOS-AppleSilicon.dmg",
+    "macos-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.2.8/DualDNS-Browser-1.2.8-macOS-Intel.dmg",
+    "windows-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.2.8/DualDNS-Browser-1.2.8-Windows-x64-Setup.exe"
   },
   "checksums": {
-    "macos-aarch64": "90f6709a7bc2280c77e9e6b37d375601d18599ca4a90206778c49aaa5908418b",
-    "macos-x86_64": "571d2cd926519b034fcfbd22a3c407c2aaab6ec1e3a6158c871706e7ded03c5d",
-    "windows-x86_64": "5c0a129cd4f3d168d5dbbb7adf3553dbab1b097ff9db1e1353c968bc6e1012de"
+    "macos-aarch64": "b8e825783904897a4661306b772f65b7044935486235eb2c2ead32a1ff6d9785",
+    "macos-x86_64": "1f16aabbb20399b4f238a0aac95cf07adb48a88766253f4907049e363617bc30",
+    "windows-x86_64": "dcbc819261a85027b9ddb559f10928a3da6fb54c0f04807b6ff8ae560530a1be"
   },
   "sizes": {
-    "macos-aarch64": 5903300,
-    "macos-x86_64": 6506631,
-    "windows-x86_64": 4506285
+    "macos-aarch64": 5903353,
+    "macos-x86_64": 6506723,
+    "windows-x86_64": 4507227
   }
 }

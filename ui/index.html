@@ -15,6 +15,36 @@
     <main class="app">
       <div class="top-actions">
         <button
+          class="theme-button"
+          id="themeBtn"
+          type="button"
+          aria-label="切换到夜间模式"
+          title="切换到夜间模式"
+          aria-pressed="false"
+        >
+          <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M20.2 14.2A8.2 8.2 0 0 1 9.8 3.8 8.3 8.3 0 1 0 20.2 14.2Z"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.7" />
+            <path
+              d="M12 2.6v2M12 19.4v2M2.6 12h2M19.4 12h2M5.4 5.4l1.4 1.4M17.2 17.2l1.4 1.4M18.6 5.4l-1.4 1.4M6.8 17.2l-1.4 1.4"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+            />
+          </svg>
+        </button>
+
+        <button
           class="version-button"
           id="updateBtn"
           type="button"
@@ -24,7 +54,7 @@
           title="检查更新"
         >
           <span class="version-dot" id="versionDot"></span>
-          <span id="versionLabel">v1.2.6</span>
+          <span id="versionLabel">v1.2.7</span>
           <svg class="version-refresh" viewBox="0 0 16 16" aria-hidden="true">
             <path
               d="M13 8a5 5 0 1 1-1.46-3.54M13 3v3.2H9.8"
@@ -325,7 +355,19 @@
                   <span class="lan-pulse" id="lanPulse"></span>
                   局域网快传
                 </div>
-                <h2 id="lanSelfName">正在获取本机信息…</h2>
+                <div class="lan-name-wrap">
+                  <h2 id="lanSelfName">正在获取本机信息…</h2>
+                  <input
+                    class="lan-name-input"
+                    id="lanSelfNameInput"
+                    type="text"
+                    maxlength="64"
+                    spellcheck="false"
+                    autocomplete="off"
+                    aria-label="本机电脑名称"
+                    hidden
+                  />
+                </div>
                 <div class="lan-self-meta">
                   <span class="lan-chip" id="lanSelfIp">IP 检测中…</span>
                   <span class="lan-chip" id="lanDiscovery">自动发现：检测中</span>
@@ -349,7 +391,7 @@
         <section class="card lan-card">
           <div class="section-head">
             <div>
-              <div class="section-kicker">在线同事</div>
+              <div class="section-kicker">在线电脑</div>
               <h2>选择一台电脑</h2>
             </div>
             <span class="lan-count" id="lanPeerCount">0 台在线</span>
@@ -365,7 +407,7 @@
               spellcheck="false"
               autocomplete="off"
               placeholder="搜索备注、电脑名称、IP 或系统"
-              aria-label="搜索在线同事"
+              aria-label="搜索在线电脑"
             />
           </label>
           <div class="lan-peer-list" id="lanPeerList">
@@ -514,7 +556,7 @@ const info = window.__DUALDNS_ENV__;
             <ul class="help-list">
               <li>双方都需要打开 DualDNS Browser，并连接到同一个可互访的局域网。</li>
               <li>自动发现使用 UDP <code>18191</code>，消息和文件传输使用 TCP <code>18190</code>。Windows 首次询问防火墙权限时请选择允许“专用网络”。</li>
-              <li>在线同事列表会随人数自动调整高度，最多显示约 5 台；同事更多时列表内部滚动。可以在上方搜索框按备注、电脑名称、IP 或 macOS / Windows 快速筛选。</li>
+              <li>在线电脑列表会随人数自动调整高度，最多显示约 5 台；电脑更多时列表内部滚动。可以在上方搜索框按备注、电脑名称、IP 或 macOS / Windows 快速筛选。</li>
               <li>点同事右侧的“备注”可以为对方起一个本机备注名。备注只保存在你的电脑上，不会修改对方名称；列表、搜索、聊天标题和通知都会优先显示备注名。</li>
               <li>收到新消息或文件时，对应同事的名称旁会出现红色未读数字；打开该同事的聊天后自动清除。</li>
               <li>公司 Wi-Fi 开启 AP 隔离 / 客户端隔离时，设备之间无法互访，自动发现会失败；可以尝试让同事把 IP 发给你后手动添加。</li>
@@ -582,7 +624,7 @@ const info = window.__DUALDNS_ENV__;
             </div>
             <div class="faq-item">
               <strong>怎么只让自己的另一台电脑看到我？</strong>
-              <p>先在正常模式下让两台电脑互相出现在在线同事列表，再打开“隐身模式”，勾选你的另一台电脑并保存。之后只有名单中的电脑能发现你。隐身期间不能手动添加新 IP；需要新增设备时，先关闭隐身模式完成发现和勾选。</p>
+              <p>先在正常模式下让两台电脑互相出现在在线电脑列表，再打开“隐身模式”，勾选你的另一台电脑并保存。之后只有名单中的电脑能发现你。隐身期间不能手动添加新 IP；需要新增设备时，先关闭隐身模式完成发现和勾选。</p>
             </div>
             <div class="faq-item">
               <strong>开了 Clash / VPN 的 TUN 模式后，外网窗口打不开网站？</strong>
@@ -852,7 +894,7 @@ const info = window.__DUALDNS_ENV__;
           <div class="update-toolbar">
             <div class="update-current">
               <span class="update-label">当前版本</span>
-              <strong id="updateCurrentVersion">v1.2.6</strong>
+              <strong id="updateCurrentVersion">v1.2.7</strong>
             </div>
             <label class="update-source" for="updateSource">
               <span class="update-label">更新源</span>
@@ -892,7 +934,7 @@ const info = window.__DUALDNS_ENV__;
             <div class="update-result-head">
               <div>
                 <span class="update-label">最新版本</span>
-                <strong id="updateLatest">v1.2.6</strong>
+                <strong id="updateLatest">v1.2.7</strong>
               </div>
               <span class="update-badge" id="updateBadge">有新版本</span>
             </div>

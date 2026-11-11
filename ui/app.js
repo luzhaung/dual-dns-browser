@@ -29,6 +29,7 @@ const stopProxiesBtn = document.getElementById("stopProxies");
 const demoInternalDns = document.getElementById("demoInternalDns");
 const demoExternalDns = document.getElementById("demoExternalDns");
 const helpBtn = document.getElementById("helpBtn");
+const themeBtn = document.getElementById("themeBtn");
 const helpModal = document.getElementById("helpModal");
 const helpClose = document.getElementById("helpClose");
 const helpDialog = helpModal.querySelector(".help-dialog");
@@ -74,6 +75,7 @@ const viewLan = document.getElementById("viewLan");
 const lanTabDot = document.getElementById("lanTabDot");
 const lanPulse = document.getElementById("lanPulse");
 const lanSelfName = document.getElementById("lanSelfName");
+const lanSelfNameInput = document.getElementById("lanSelfNameInput");
 const lanSelfIp = document.getElementById("lanSelfIp");
 const lanDiscovery = document.getElementById("lanDiscovery");
 const lanVersion = document.getElementById("lanVersion");
@@ -157,7 +159,7 @@ let updateBusy = false;
 let updateInstallBusy = false;
 let updateInstallLink = null;
 let updateSource = readStorage("dualdns.updateSource", "auto");
-let currentVersion = "1.2.6";
+let currentVersion = "1.2.7";
 let currentPlatformLabel = "";
 let dismissedUpdate = readStorage("dualdns.dismissedUpdate", "");
 let currentView = "browser";
@@ -168,6 +170,7 @@ let lanSelectedPeerId = "";
 let lanActionBusy = false;
 let lanRenameEditing = false;
 let lanRenameOriginal = "";
+let lanRenameSaving = false;
 let lanPeerQuery = "";
 let lanPrivacyReturnFocus = null;
 let lanPrivacyDraftPrivate = false;
@@ -206,6 +209,38 @@ function writeStorage(key, value) {
   } catch {
     // Storage can be unavailable in some WebView modes; the app still works.
   }
+}
+
+const themeMedia = window.matchMedia?.("(prefers-color-scheme: dark)");
+
+function activeTheme() {
+  return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+}
+
+function applyTheme(theme, persist) {
+  const dark = theme === "dark";
+  const root = document.documentElement;
+  root.dataset.theme = dark ? "dark" : "light";
+  root.dataset.themeSource = persist ? "manual" : "system";
+  const colorScheme = document.querySelector('meta[name="color-scheme"]');
+  if (colorScheme) colorScheme.content = dark ? "dark" : "light";
+  if (persist) writeStorage("dual-dns-theme", dark ? "dark" : "light");
+  const nextLabel = dark ? "切换到日间模式" : "切换到夜间模式";
+  themeBtn.setAttribute("aria-label", nextLabel);
+  themeBtn.title = nextLabel;
+  themeBtn.setAttribute("aria-pressed", dark ? "true" : "false");
+  refreshAccents();
+}
+
+function initTheme() {
+  applyTheme(activeTheme(), readStorage("dual-dns-theme", "") === activeTheme());
+  themeBtn.addEventListener("click", () => {
+    applyTheme(activeTheme() === "dark" ? "light" : "dark", true);
+  });
+  themeMedia?.addEventListener("change", (event) => {
+    if (readStorage("dual-dns-theme", "")) return;
+    applyTheme(event.matches ? "dark" : "light", false);
+  });
 }
 
 function readLanNotes() {
@@ -268,15 +303,22 @@ function shade(hex, factor) {
   return `rgb(${to(r)}, ${to(g)}, ${to(b)})`;
 }
 
+function tint(hex, amount) {
+  const { r, g, b } = hexToRgb(hex);
+  const to = (value) => Math.round(value + (255 - value) * amount);
+  return `rgb(${to(r)}, ${to(g)}, ${to(b)})`;
+}
+
 function applyAccent(target, env, rawColor) {
   const color = normalizeHex(rawColor) || DEFAULTS[`${env}_color`];
+  const dark = activeTheme() === "dark";
   const root = document.documentElement;
   root.style.setProperty(`--${env}`, color);
-  root.style.setProperty(`--${env}-soft`, rgba(color, 0.11));
-  root.style.setProperty(`--${env}-faint`, rgba(color, 0.06));
-  root.style.setProperty(`--${env}-ring`, rgba(color, 0.42));
-  root.style.setProperty(`--${env}-ink`, shade(color, 0.62));
-  root.style.setProperty(`--${env}-shadow`, rgba(color, 0.16));
+  root.style.setProperty(`--${env}-soft`, rgba(color, dark ? 0.18 : 0.11));
+  root.style.setProperty(`--${env}-faint`, rgba(color, dark ? 0.09 : 0.06));
+  root.style.setProperty(`--${env}-ring`, rgba(color, dark ? 0.46 : 0.42));
+  root.style.setProperty(`--${env}-ink`, dark ? tint(color, 0.45) : shade(color, 0.62));
+  root.style.setProperty(`--${env}-shadow`, rgba(color, dark ? 0.22 : 0.16));
   target.style.backgroundColor = color;
 }
 
@@ -1215,7 +1257,7 @@ function renderLanPrivacyList() {
       "lan-empty",
       lanSnapshotData?.privacy?.enabled
         ? "当前名单为空。关闭隐身模式并发现其他电脑后，再回来设置可见范围。"
-        : "还没有发现其他电脑。先让两台电脑正常出现在在线同事列表，再回来勾选。",
+        : "还没有发现其他电脑。先让两台电脑正常出现在在线电脑列表，再回来勾选。",
     ));
     return;
   }
@@ -2265,8 +2307,8 @@ async function clearLanMessages() {
 
 function endLanRename(restore = false) {
   lanRenameEditing = false;
-  lanSelfName.removeAttribute("contenteditable");
-  lanSelfName.classList.remove("editing");
+  lanSelfNameInput.hidden = true;
+  lanSelfName.hidden = false;
   lanRenameBtn.textContent = "修改名称";
   lanRenameBtn.disabled = false;
   if (restore) {
@@ -2277,34 +2319,38 @@ function endLanRename(restore = false) {
 }
 
 async function saveLanRename() {
-  if (!lanRenameEditing) return;
-  const name = lanSelfName.textContent.trim();
+  if (!lanRenameEditing || lanRenameSaving) return;
+  const name = lanSelfNameInput.value.trim();
   if (!name) {
     showToast("电脑名称不能为空", "error");
-    lanSelfName.focus();
+    lanSelfNameInput.focus();
     return;
   }
   if (name === lanRenameOriginal) {
     endLanRename();
     return;
   }
+  lanRenameSaving = true;
   lanRenameBtn.disabled = true;
   try {
     const result = await invoke("lan_set_name", { name });
     lanRenameOriginal = name;
     endLanRename();
+    lanSelfName.textContent = name;
     if (result?.snapshot) renderLanSnapshot(result.snapshot);
     showToast("电脑名称已更新", "success");
   } catch (error) {
     showToast(friendlyError(error), "error");
+    lanSelfNameInput.focus();
+  } finally {
+    lanRenameSaving = false;
     lanRenameBtn.disabled = false;
-    lanSelfName.focus();
   }
 }
 
 function toggleLanRename() {
   if (lanRenameEditing) {
-    saveLanRename();
+    endLanRename(true);
     return;
   }
   if (!lanSnapshotData?.self) {
@@ -2313,16 +2359,13 @@ function toggleLanRename() {
   }
   lanRenameEditing = true;
   lanRenameOriginal = lanSnapshotData.self.name || "";
-  lanSelfName.textContent = lanRenameOriginal;
-  lanSelfName.setAttribute("contenteditable", "true");
-  lanSelfName.classList.add("editing");
-  lanRenameBtn.textContent = "保存名称";
-  lanSelfName.focus();
-  const range = document.createRange();
-  range.selectNodeContents(lanSelfName);
-  const selection = window.getSelection();
-  selection.removeAllRanges();
-  selection.addRange(range);
+  lanSelfNameInput.value = lanRenameOriginal;
+  lanSelfName.hidden = true;
+  lanSelfNameInput.hidden = false;
+  lanRenameBtn.textContent = "取消";
+  lanSelfNameInput.focus();
+  lanSelfNameInput.select();
+  lanSelfNameInput.scrollLeft = 0;
 }
 
 [internalInput, externalInput, browserPath].forEach((input) => {
@@ -2411,7 +2454,10 @@ tabLan.addEventListener("click", () => setView("lan"));
   });
 });
 lanRenameBtn.addEventListener("click", toggleLanRename);
-lanSelfName.addEventListener("keydown", (event) => {
+lanRenameBtn.addEventListener("pointerdown", (event) => {
+  if (lanRenameEditing) event.preventDefault();
+});
+lanSelfNameInput.addEventListener("keydown", (event) => {
   if (!lanRenameEditing) return;
   if (event.key === "Enter") {
     event.preventDefault();
@@ -2420,6 +2466,9 @@ lanSelfName.addEventListener("keydown", (event) => {
     event.preventDefault();
     endLanRename(true);
   }
+});
+lanSelfNameInput.addEventListener("blur", () => {
+  if (lanRenameEditing) saveLanRename();
 });
 lanRefreshBtn.addEventListener("click", () => refreshLan({ silent: false, manual: true }));
 lanPeerSearch.addEventListener("input", () => {
@@ -2592,6 +2641,7 @@ function notifyUiReady() {
 }
 
 notifyUiReady();
+initTheme();
 loadSettings().then(refreshStatus).then(initUpdates);
 renderLanTargets();
 scheduleLanPolling();

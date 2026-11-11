@@ -1,21 +1,21 @@
 {
-  "version": "1.2.8",
-  "published_at": "2026-11-11T11:14:51.433Z",
-  "notes": "## v1.2.8\n\n优化夜间模式下的状态辨识度。\n\n- 修复夜间模式下浏览器、DNS 代理和版本状态的小圆点显示成灰色的问题，启用、警告状态现在恢复为清晰的绿色和橙色。\n- 修复夜间模式下“隐身模式”开关开启后仍像关闭状态的问题，开启后显示明显的蓝色高亮。\n- 增强夜间模式下“内外网浏览器 / 局域网快传”页签选中态，增加蓝色底色和描边，更容易区分当前页面。\n- 同步修复 DNS 输入框改动标记在夜间模式下颜色不明显的问题。",
-  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.2.8",
+  "version": "1.2.9",
+  "published_at": "2026-11-11T12:44:32.780Z",
+  "notes": "## v1.2.9\n\n优化局域网快传的状态识别和聊天交互细节。\n\n- 在线 / 离线电脑卡片使用统一底色，离线卡片改为更暗的背景、弱化的文字和灰色状态胶囊，在线状态显示为绿色胶囊，一眼即可区分。\n- 隐身模式可见名单与主界面的电脑卡片统一背景和状态样式，修复夜间模式下离线文字仍显示绿色的问题。\n- 选中离线电脑时保留清晰的蓝色选中描边，不会因为离线样式而看不出当前选择。\n- 提高所有局域网输入框获得焦点时的边框亮度和蓝色光晕，明暗主题下都更容易辨认。\n- 发送消息、切换聊天对象或图片加载完成后可靠滚动到会话底部；用户正在查看历史消息时不会被新消息强行拉回底部。",
+  "release_page": "https://github.com/luzhaung/dual-dns-browser/releases/tag/v1.2.9",
   "downloads": {
-    "macos-aarch64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.2.8/DualDNS-Browser-1.2.8-macOS-AppleSilicon.dmg",
-    "macos-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.2.8/DualDNS-Browser-1.2.8-macOS-Intel.dmg",
-    "windows-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.2.8/DualDNS-Browser-1.2.8-Windows-x64-Setup.exe"
+    "macos-aarch64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.2.9/DualDNS-Browser-1.2.9-macOS-AppleSilicon.dmg",
+    "macos-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.2.9/DualDNS-Browser-1.2.9-macOS-Intel.dmg",
+    "windows-x86_64": "https://github.com/luzhaung/dual-dns-browser/releases/download/v1.2.9/DualDNS-Browser-1.2.9-Windows-x64-Setup.exe"
   },
   "checksums": {
-    "macos-aarch64": "b8e825783904897a4661306b772f65b7044935486235eb2c2ead32a1ff6d9785",
-    "macos-x86_64": "1f16aabbb20399b4f238a0aac95cf07adb48a88766253f4907049e363617bc30",
-    "windows-x86_64": "dcbc819261a85027b9ddb559f10928a3da6fb54c0f04807b6ff8ae560530a1be"
+    "macos-aarch64": "6954b1e4485300f9b306feb12c84251aab6b1f1c0f889aaab15f4be2b430af8e",
+    "macos-x86_64": "35becfd1275dc89e3a876bf9a0628af384c55cca5f9301f7a6baae1740b0ccc0",
+    "windows-x86_64": "aa6645b9ca558a6ddbff931ca0c87c69f5b0be9815ae5649153077aa3b511380"
   },
   "sizes": {
-    "macos-aarch64": 5903353,
-    "macos-x86_64": 6506723,
-    "windows-x86_64": 4507227
+    "macos-aarch64": 5903526,
+    "macos-x86_64": 6507047,
+    "windows-x86_64": 4507302
   }
 }

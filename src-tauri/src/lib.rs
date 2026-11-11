@@ -1,6 +1,7 @@
 mod marker;
 mod update;
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -651,6 +652,57 @@ fn lan_request(
         return Err(message.to_string());
     }
     Ok(parsed)
+}
+
+fn lan_binary_request(path: &str, timeout: Duration) -> Result<(String, Vec<u8>), String> {
+    let connect_timeout = timeout.min(Duration::from_secs(3));
+    let addr = SocketAddr::from(([127, 0, 0, 1], LAN_PORT));
+    let mut stream = TcpStream::connect_timeout(&addr, connect_timeout)
+        .map_err(|_| "局域网服务尚未就绪，请稍后重试".to_string())?;
+    stream.set_read_timeout(Some(timeout)).ok();
+    stream.set_write_timeout(Some(timeout)).ok();
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| format!("发送局域网请求失败: {e}"))?;
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .map_err(|e| format!("读取局域网服务响应失败: {e}"))?;
+    let split = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| "局域网服务返回格式异常".to_string())?;
+    let head = String::from_utf8_lossy(&response[..split]);
+    let body = response[split + 4..].to_vec();
+    let status = head
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(0);
+    if status != 200 {
+        let message = serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|value| value.get("error").and_then(|item| item.as_str()).map(str::to_string))
+            .unwrap_or_else(|| "读取图片失败".to_string());
+        return Err(message);
+    }
+    let content_type = head
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if name.eq_ignore_ascii_case("content-type") {
+                Some(value.trim().to_string())
+            } else {
+                None
+            }
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "image/png".to_string());
+    Ok((content_type, body))
 }
 
 fn lan_health() -> Option<LanHealth> {
@@ -1898,12 +1950,77 @@ async fn lan_discard_transfer(id: String) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-async fn lan_clear_messages() -> Result<serde_json::Value, String> {
+async fn lan_preview(id: String, direction: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = format!("/__ddb/lan/preview?id={id}&direction={direction}");
+        let (content_type, bytes) = lan_binary_request(&path, Duration::from_secs(12))?;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        Ok(format!("data:{content_type};base64,{encoded}"))
+    })
+    .await
+    .map_err(|error| format!("读取图片失败: {error}"))?
+}
+
+#[tauri::command]
+async fn lan_save_pasted_image(
+    app: AppHandle,
+    data: String,
+    file_name: String,
+) -> Result<String, String> {
+    let payload = data
+        .split_once(',')
+        .map(|(_, value)| value)
+        .unwrap_or(data.as_str());
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload.trim())
+        .map_err(|_| "粘贴的图片数据无效".to_string())?;
+    if bytes.is_empty() {
+        return Err("粘贴的图片为空".to_string());
+    }
+    if bytes.len() > 20 * 1024 * 1024 {
+        return Err("粘贴的图片不能超过 20 MB".to_string());
+    }
+
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("无法定位应用数据目录: {error}"))?
+        .join("outbox");
+    fs::create_dir_all(&dir).map_err(|error| format!("无法创建图片缓存目录: {error}"))?;
+
+    let mut name = Path::new(&file_name)
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| "粘贴图片.png".to_string());
+    if Path::new(&name).extension().is_none() {
+        name.push_str(".png");
+    }
+    let name: String = name
+        .chars()
+        .map(|value| {
+            if value.is_control() || value == '/' || value == '\\' {
+                '_'
+            } else {
+                value
+            }
+        })
+        .collect();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_millis())
+        .unwrap_or(0);
+    let path = dir.join(format!("{stamp}-{name}"));
+    fs::write(&path, bytes).map_err(|error| format!("保存粘贴图片失败: {error}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn lan_clear_messages(peer_id: Option<String>) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
         lan_request(
             "POST",
             "/__ddb/lan/clear",
-            None,
+            Some(serde_json::json!({ "peerId": peer_id.unwrap_or_default() })),
             Duration::from_secs(6),
         )
     })
@@ -2200,6 +2317,8 @@ pub fn run() {
             lan_pick_files,
             lan_accept_transfer,
             lan_discard_transfer,
+            lan_preview,
+            lan_save_pasted_image,
             lan_clear_messages,
             lan_open_downloads,
             lan_probe_network_access,

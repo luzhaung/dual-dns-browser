@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -68,18 +69,22 @@ func (s *Service) handleSendFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	item := &outgoing{
-		ID:       randomHex(8),
-		PeerID:   target.ID,
-		PeerName: target.Name,
-		FileName: filepath.Base(body.Path),
-		Size:     info.Size(),
-		Status:   "sending",
-		At:       time.Now().UnixMilli(),
+		ID:         randomHex(8),
+		PeerID:     target.ID,
+		PeerName:   target.Name,
+		FileName:   filepath.Base(body.Path),
+		Size:       info.Size(),
+		Status:     "sending",
+		At:         time.Now().UnixMilli(),
+		SourcePath: body.Path,
 	}
 	s.mu.Lock()
 	s.outgoing[item.ID] = item
+	s.persistOutgoingLocked()
 	snapshot := *item
+	at := item.At
 	s.mu.Unlock()
+	s.touchContact(target, at)
 
 	go s.upload(item.ID, target, body.Path, info.Size())
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "transfer": snapshot})
@@ -177,6 +182,7 @@ func (s *Service) finishTransfer(id, status, message string) {
 			item.Done = item.Size
 		}
 	}
+	s.persistOutgoingLocked()
 	s.mu.Unlock()
 }
 
@@ -281,15 +287,16 @@ func (s *Service) handleIncomingFile(w http.ResponseWriter, r *http.Request) {
 		sourceIP = host
 	}
 	item := &incoming{
-		ID:       id,
-		FromID:   fromID,
-		FromName: fromName,
-		FromIP:   sourceIP,
-		FileName: fileName,
-		Size:     size,
-		Status:   "pending",
-		At:       time.Now().UnixMilli(),
-		TempPath: finalPath,
+		ID:           id,
+		FromID:       fromID,
+		FromName:     fromName,
+		FromIP:       sourceIP,
+		FromPlatform: fromPlatform,
+		FileName:     fileName,
+		Size:         size,
+		Status:       "pending",
+		At:           time.Now().UnixMilli(),
+		TempPath:     finalPath,
 	}
 	s.mu.Lock()
 	s.incoming[id] = item
@@ -298,7 +305,9 @@ func (s *Service) handleIncomingFile(w http.ResponseWriter, r *http.Request) {
 		existing.LastSeen = item.At
 	}
 	s.persistIncomingLocked()
+	at := item.At
 	s.mu.Unlock()
+	s.touchContactByID(fromID, at)
 
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": id})
 }
@@ -344,7 +353,11 @@ func (s *Service) handleAccept(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mu.Lock()
-	delete(s.incoming, body.ID)
+	if stored, ok := s.incoming[body.ID]; ok {
+		stored.Status = "saved"
+		stored.SavedTo = destination
+		stored.TempPath = ""
+	}
 	s.persistIncomingLocked()
 	s.mu.Unlock()
 
@@ -365,8 +378,12 @@ func (s *Service) handleDiscard(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	item, ok := s.incoming[body.ID]
+	tempPath := ""
 	if ok {
-		delete(s.incoming, body.ID)
+		tempPath = item.TempPath
+		item.Status = "discarded"
+		item.TempPath = ""
+		item.SavedTo = ""
 		s.persistIncomingLocked()
 	}
 	s.mu.Unlock()
@@ -374,8 +391,66 @@ func (s *Service) handleDiscard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "文件不存在或已处理")
 		return
 	}
-	_ = os.Remove(item.TempPath)
+	if tempPath != "" {
+		_ = os.Remove(tempPath)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Service) handlePreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "只支持 GET")
+		return
+	}
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	direction := strings.TrimSpace(r.URL.Query().Get("direction"))
+	if !validID(id) {
+		writeError(w, http.StatusBadRequest, "文件编号无效")
+		return
+	}
+
+	s.mu.RLock()
+	var name, path string
+	switch direction {
+	case "in":
+		if item, ok := s.incoming[id]; ok {
+			name = item.FileName
+			path = incomingPath(item)
+		}
+	case "out":
+		if item, ok := s.outgoing[id]; ok {
+			name = item.FileName
+			path = item.SourcePath
+		}
+	default:
+		s.mu.RUnlock()
+		writeError(w, http.StatusBadRequest, "预览方向无效")
+		return
+	}
+	s.mu.RUnlock()
+
+	if !isImageFileName(name) || path == "" {
+		writeError(w, http.StatusNotFound, "图片不可预览")
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maxPreviewBytes {
+		writeError(w, http.StatusNotFound, "图片不存在或超过预览大小限制")
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取图片失败")
+		return
+	}
+	contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(name)))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(data)
 }
 
 func sanitizeFileName(value string) string {

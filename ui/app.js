@@ -128,6 +128,9 @@ const lanNoteInput = document.getElementById("lanNoteInput");
 const lanNoteRemove = document.getElementById("lanNoteRemove");
 const lanNoteCancel = document.getElementById("lanNoteCancel");
 const lanNoteSave = document.getElementById("lanNoteSave");
+const lanImageLightbox = document.getElementById("lanImageLightbox");
+const lanImageLightboxImg = document.getElementById("lanImageLightboxImg");
+const lanImageLightboxClose = document.getElementById("lanImageLightboxClose");
 
 const DEFAULTS = {
   internal_dns: "192.168.2.19",
@@ -154,7 +157,7 @@ let updateBusy = false;
 let updateInstallBusy = false;
 let updateInstallLink = null;
 let updateSource = readStorage("dualdns.updateSource", "auto");
-let currentVersion = "1.2.5";
+let currentVersion = "1.2.6";
 let currentPlatformLabel = "";
 let dismissedUpdate = readStorage("dualdns.dismissedUpdate", "");
 let currentView = "browser";
@@ -173,6 +176,10 @@ let lanPrivacyQuery = "";
 let lanPrivacySaving = false;
 let lanSeenAttention = new Set();
 let lanAttentionPrimed = false;
+let lanImageCache = new Map();
+let lanImageLoading = new Set();
+let lanImageLightboxReturnFocus = null;
+let lanPasteBusy = false;
 let lanAttentionCount = 0;
 let lanPeerUnread = new Map();
 let lanMessageSignature = "";
@@ -375,7 +382,8 @@ function syncModalLock() {
       || !updateModal.hidden
       || !lanPermissionModal.hidden
       || !lanPrivacyModal.hidden
-      || !lanNoteModal.hidden,
+      || !lanNoteModal.hidden
+      || !lanImageLightbox.hidden,
   );
 }
 
@@ -1010,11 +1018,19 @@ function syncLanAttention(data) {
 
 function renderLanTargets() {
   const peer = selectedLanPeer();
+  const online = Boolean(peer?.online);
   const privateMode = Boolean(lanSnapshotData?.privacy?.enabled);
   lanChatTitle.textContent = peer ? `和 ${lanPeerLabel(peer)} 聊天` : "选择同事开始聊天";
   lanChatTitle.title = peer?.name && lanPeerNote(peer.id) ? `电脑名称：${peer.name}` : "";
-  lanSendMessage.disabled = !peer || lanActionBusy;
-  lanPickFiles.disabled = !peer || lanActionBusy;
+  lanSendMessage.disabled = !online || lanActionBusy;
+  lanPickFiles.disabled = !online || lanActionBusy;
+  lanMessageInput.disabled = !online || lanActionBusy;
+  lanMessageInput.placeholder = !peer
+    ? "先选择上面的同事"
+    : online
+      ? "输入消息，回车发送；可直接粘贴图片"
+      : "对方当前离线，上线后即可发送";
+  lanClearMessages.disabled = !peer || lanActionBusy;
   lanAddIp.disabled = privateMode;
   lanAddBtn.disabled = lanActionBusy || privateMode;
   lanAddBtn.title = privateMode ? "开启隐身模式时不能手动添加新设备" : "";
@@ -1128,13 +1144,16 @@ function renderLanPeers(peers) {
     });
     const messageBtn = lanElement("button", "", "发消息");
     messageBtn.type = "button";
+    messageBtn.disabled = !peer.online || lanActionBusy;
+    messageBtn.title = peer.online ? "" : "对方当前离线，上线后即可发送";
     messageBtn.addEventListener("click", (event) => {
       event.stopPropagation();
       selectLanPeer(peer.id, { focusMessage: true });
     });
     const fileBtn = lanElement("button", "", "传文件");
     fileBtn.type = "button";
-    fileBtn.disabled = lanActionBusy;
+    fileBtn.disabled = !peer.online || lanActionBusy;
+    fileBtn.title = peer.online ? "" : "对方当前离线，上线后即可发送";
     fileBtn.addEventListener("click", (event) => {
       event.stopPropagation();
       selectLanPeer(peer.id, { sendFiles: true });
@@ -1414,12 +1433,90 @@ function lanFileStatusText(item) {
   return `发送中 ${percent}%`;
 }
 
+function isLanImageName(name) {
+  return /\.(png|jpe?g|gif|webp|bmp)$/i.test(String(name || ""));
+}
+
+function lanPreviewKey(direction, id) {
+  return `${direction}:${id}`;
+}
+
+function openLanImageLightbox(src) {
+  if (!src || !lanImageLightbox.hidden) return;
+  lanImageLightboxReturnFocus = document.activeElement;
+  lanImageLightboxImg.src = src;
+  lanImageLightbox.hidden = false;
+  syncModalLock();
+  window.requestAnimationFrame(() => lanImageLightboxClose.focus());
+}
+
+function closeLanImageLightbox() {
+  if (lanImageLightbox.hidden) return;
+  lanImageLightbox.hidden = true;
+  lanImageLightboxImg.removeAttribute("src");
+  syncModalLock();
+  if (lanImageLightboxReturnFocus instanceof HTMLElement) {
+    lanImageLightboxReturnFocus.focus();
+  }
+  lanImageLightboxReturnFocus = null;
+}
+
+function lanPreviewImage(src) {
+  const image = document.createElement("img");
+  image.className = "lan-image-preview";
+  image.src = src;
+  image.alt = "聊天图片";
+  image.loading = "lazy";
+  image.addEventListener("click", () => openLanImageLightbox(src));
+  return image;
+}
+
+function renderLanPreview(item, direction) {
+  const key = lanPreviewKey(direction, item.id);
+  const cached = lanImageCache.get(key);
+  if (cached) return lanPreviewImage(cached);
+  if (cached === "") return lanElement("div", "lan-image-loading", "当前无法预览这张图片");
+  if (!invoke) return lanElement("div", "lan-image-loading", "桌面应用中才能预览图片");
+
+  const placeholder = lanElement("div", "lan-image-loading", "图片加载中…");
+  placeholder.dataset.lanPreviewKey = key;
+  if (!lanImageLoading.has(key)) {
+    lanImageLoading.add(key);
+    invoke("lan_preview", { id: item.id, direction })
+      .then((src) => {
+        lanImageCache.set(key, src || "");
+        document.querySelectorAll("[data-lan-preview-key]").forEach((node) => {
+          if (node.dataset.lanPreviewKey !== key) return;
+          if (src) {
+            node.replaceWith(lanPreviewImage(src));
+          } else {
+            node.textContent = "当前无法预览这张图片";
+          }
+        });
+      })
+      .catch(() => {
+        lanImageCache.set(key, "");
+        document.querySelectorAll("[data-lan-preview-key]").forEach((node) => {
+          if (node.dataset.lanPreviewKey === key) {
+            node.textContent = "当前无法预览这张图片";
+          }
+        });
+      })
+      .finally(() => lanImageLoading.delete(key));
+  }
+  return placeholder;
+}
+
 function renderLanFileMessage(item, direction) {
   const outgoing = direction === "out";
-  const row = lanElement("article", `lan-file lan-chat-file ${outgoing ? "out" : "in"}`);
+  const row = lanElement(
+    "article",
+    `lan-file lan-chat-file ${outgoing ? "out" : "in"}${item.preview ? " has-preview" : ""}`,
+  );
   const icon = lanElement("span", "lan-file-icon", outgoing ? "↑" : "↓");
   const main = lanElement("span", "lan-file-main");
   main.appendChild(lanElement("span", "lan-file-name", item.fileName || "未命名文件"));
+  if (item.preview) main.appendChild(renderLanPreview(item, outgoing ? "out" : "in"));
 
   if (outgoing) {
     const statusText = lanFileStatusText(item);
@@ -1451,6 +1548,19 @@ function renderLanFileMessage(item, direction) {
     "lan-file-meta",
     `${source}${ip} · ${formatBytes(item.size)} · ${formatLanTime(item.at)}`,
   ));
+  if (item.status === "saved") {
+    const state = lanElement("span", "lan-file-state", "已保存");
+    state.title = item.savedTo || "";
+    main.appendChild(state);
+  } else if (item.status === "discarded") {
+    main.appendChild(lanElement("span", "lan-file-state muted", "已忽略"));
+  } else if (item.status === "missing") {
+    main.appendChild(lanElement("span", "lan-file-state muted", "文件已过期，无法再保存"));
+  }
+  if (item.status !== "pending") {
+    row.append(icon, main);
+    return row;
+  }
   const actions = lanElement("span", "lan-file-actions");
   const accept = lanElement("button", "accept", "保存");
   accept.type = "button";
@@ -1479,8 +1589,8 @@ function renderLanMessages(messages, incoming, outgoing) {
   const signature = [
     peer?.id || "",
     visibleMessages.map((message) => `m:${message.id}:${message.at}`).join("|"),
-    visibleIncoming.map((item) => `i:${item.id}:${item.status}:${item.at}`).join("|"),
-    visibleOutgoing.map((item) => `o:${item.id}:${item.status}:${item.done}:${item.at}`).join("|"),
+    visibleIncoming.map((item) => `i:${item.id}:${item.status}:${item.preview ? 1 : 0}:${item.at}`).join("|"),
+    visibleOutgoing.map((item) => `o:${item.id}:${item.status}:${item.done}:${item.preview ? 1 : 0}:${item.at}`).join("|"),
   ].join(":");
   if (signature === lanMessageSignature) return;
   const nearBottom =
@@ -1512,7 +1622,7 @@ function renderLanMessages(messages, incoming, outgoing) {
     lanMessages.appendChild(lanElement(
       "div",
       "lan-empty",
-      `还没有和 ${lanPeerLabel(peer)} 的消息或文件。输入内容，或点输入框右侧的回形针发送文件。`,
+      `还没有和 ${lanPeerLabel(peer)} 的消息或文件。输入内容、粘贴图片，或点输入框右侧的回形针发送文件。`,
     ));
     return;
   }
@@ -1725,6 +1835,10 @@ async function sendLanMessage() {
     showToast("请先选择一个同事的设备", "error");
     return;
   }
+  if (!peer.online) {
+    showToast(`${lanPeerLabel(peer)} 当前离线，无法发送消息`, "error");
+    return;
+  }
   if (!text) {
     showToast("请输入消息内容", "error");
     lanMessageInput.focus();
@@ -1755,6 +1869,10 @@ async function pickAndSendLanFiles() {
     showToast("请先选择一个同事的设备", "error");
     return;
   }
+  if (!peer.online) {
+    showToast(`${lanPeerLabel(peer)} 当前离线，无法发送文件`, "error");
+    return;
+  }
   if (!invoke) {
     showToast("当前为界面预览模式，桌面应用中才能发送文件", "error");
     return;
@@ -1765,6 +1883,96 @@ async function pickAndSendLanFiles() {
     await sendLanFilesToPeer(peer, paths);
   } catch (error) {
     showToast(friendlyError(error), "error");
+  }
+}
+
+function lanPasteStamp() {
+  const date = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+    "-",
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds()),
+  ].join("");
+}
+
+function lanPastedImageName(file, index) {
+  const type = String(file?.type || "").toLowerCase();
+  const extensionByType = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+    "image/bmp": "bmp",
+  };
+  const rawName = String(file?.name || "").trim();
+  const rawExtension = rawName.includes(".") ? rawName.split(".").pop().toLowerCase() : "";
+  const extension = extensionByType[type]
+    || (/^[a-z0-9]{2,5}$/.test(rawExtension) ? rawExtension : "png");
+  const suffix = index > 0 ? `-${index + 1}` : "";
+  return `粘贴图片-${lanPasteStamp()}${suffix}.${extension}`;
+}
+
+function readBlobAsDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("读取剪贴板图片失败"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function pasteLanImages(files) {
+  const peer = selectedLanPeer();
+  if (!peer) {
+    showToast("请先选择一个同事的设备", "error");
+    return;
+  }
+  if (!peer.online) {
+    showToast(`${lanPeerLabel(peer)} 当前离线，无法发送图片`, "error");
+    return;
+  }
+  if (!invoke) {
+    showToast("当前为界面预览模式，桌面应用中才能发送图片", "error");
+    return;
+  }
+  if (lanPasteBusy || lanActionBusy) return;
+
+  const maxBytes = 20 * 1024 * 1024;
+  const images = (Array.isArray(files) ? files : [])
+    .filter((file) => file && String(file.type || "").startsWith("image/"));
+  if (images.length === 0) return;
+  const oversized = images.filter((file) => Number(file.size) > maxBytes);
+  if (oversized.length > 0) {
+    showToast(`${oversized.length} 张图片超过 20 MB，已跳过`, "error");
+  }
+  const accepted = images.filter((file) => Number(file.size) <= maxBytes);
+  if (accepted.length === 0) return;
+
+  lanPasteBusy = true;
+  showToast(`正在准备 ${accepted.length} 张粘贴图片…`, "info");
+  try {
+    const paths = [];
+    for (let index = 0; index < accepted.length; index += 1) {
+      const file = accepted[index];
+      const data = await readBlobAsDataUrl(file);
+      const path = await invoke("lan_save_pasted_image", {
+        data,
+        fileName: lanPastedImageName(file, index),
+      });
+      if (path) paths.push(path);
+    }
+    if (paths.length > 0) {
+      await sendLanFilesToPeer(peer, paths);
+    }
+  } catch (error) {
+    showToast(friendlyError(error), "error");
+  } finally {
+    lanPasteBusy = false;
   }
 }
 
@@ -2023,14 +2231,31 @@ async function discardLanFile(id, button) {
 
 async function clearLanMessages() {
   if (lanActionBusy || !invoke) return;
-  if (!window.confirm("清空本机保存的全部局域网消息记录？已接收的文件不会删除。")) return;
+  const peer = selectedLanPeer();
+  if (!peer) {
+    showToast("请先选择要清空会话的同事", "error");
+    return;
+  }
+  if (!window.confirm(`清空和 ${lanPeerLabel(peer)} 的消息与文件记录？已保存到下载目录的文件不会删除。`)) {
+    return;
+  }
+  for (const item of Array.isArray(lanSnapshotData?.incoming) ? lanSnapshotData.incoming : []) {
+    if (item.fromId === peer.id) lanImageCache.delete(lanPreviewKey("in", item.id));
+  }
+  for (const item of Array.isArray(lanSnapshotData?.outgoing) ? lanSnapshotData.outgoing : []) {
+    if (item.peerId === peer.id) lanImageCache.delete(lanPreviewKey("out", item.id));
+  }
   setLanActionBusy(true);
   try {
-    await invoke("lan_clear_messages");
+    const result = await invoke("lan_clear_messages", { peerId: peer.id });
     lanMessageSignature = "";
-    lanPeerUnread.clear();
-    await refreshLan({ silent: true });
-    showToast("消息记录已清空", "success");
+    lanPeerUnread.delete(peer.id);
+    if (result?.snapshot) {
+      renderLanSnapshot(result.snapshot);
+    } else {
+      await refreshLan({ silent: true });
+    }
+    showToast(`已清空和 ${lanPeerLabel(peer)} 的会话`, "success");
   } catch (error) {
     showToast(friendlyError(error), "error");
   } finally {
@@ -2250,8 +2475,28 @@ lanMessageInput.addEventListener("keydown", (event) => {
     sendLanMessage();
   }
 });
+lanMessageInput.addEventListener("paste", (event) => {
+  const items = Array.from(event.clipboardData?.items || []);
+  let images = items
+    .filter((item) => item.kind === "file" && String(item.type || "").startsWith("image/"))
+    .map((item) => item.getAsFile())
+    .filter(Boolean);
+  if (images.length === 0) {
+    images = Array.from(event.clipboardData?.files || [])
+      .filter((file) => String(file.type || "").startsWith("image/"));
+  }
+  if (images.length === 0) return;
+  event.preventDefault();
+  pasteLanImages(images);
+});
 lanPickFiles.addEventListener("click", pickAndSendLanFiles);
 lanClearMessages.addEventListener("click", clearLanMessages);
+lanImageLightboxClose.addEventListener("click", closeLanImageLightbox);
+lanImageLightbox.addEventListener("click", (event) => {
+  if (event.target === lanImageLightbox || event.target === lanImageLightboxImg) {
+    closeLanImageLightbox();
+  }
+});
 lanOpenDownloads.addEventListener("click", async () => {
   if (!invoke) return;
   try {
@@ -2306,6 +2551,13 @@ updateRelease.addEventListener("click", () => {
 });
 
 document.addEventListener("keydown", (event) => {
+  if (!lanImageLightbox.hidden) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeLanImageLightbox();
+    }
+    return;
+  }
   if (
     !helpModal.hidden
     || !updateModal.hidden

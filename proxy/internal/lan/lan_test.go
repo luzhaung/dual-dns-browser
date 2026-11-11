@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestControlRoutesAreLoopbackOnly(t *testing.T) {
@@ -52,6 +55,7 @@ func TestControlPath(t *testing.T) {
 		"/__ddb/lan/accept",
 		"/__ddb/lan/discard",
 		"/__ddb/lan/clear",
+		"/__ddb/lan/preview",
 		"/__ddb/lan/shutdown",
 	} {
 		if !controlPath(path) {
@@ -308,5 +312,227 @@ func TestHiddenBeaconRequiresThisAudience(t *testing.T) {
 	item.Audience = service.id
 	if ok, _ := service.absorbBeacon(item, nil); !ok {
 		t.Fatal("targeted beacon from allowed peer was rejected")
+	}
+}
+
+func snapshotPeerByID(snapshot map[string]any, id string) *peer {
+	peers, _ := snapshot["peers"].([]peer)
+	for index := range peers {
+		if peers[index].ID == id {
+			return &peers[index]
+		}
+	}
+	return nil
+}
+
+func TestHistorySeedsOfflineContactsOnUpgrade(t *testing.T) {
+	dataDir := t.TempDir()
+	history := []message{
+		{
+			ID:        "aabbccdd",
+			Direction: "in",
+			PeerID:    "11223344",
+			PeerName:  "旧会话同事",
+			Text:      "历史消息",
+			At:        time.Now().Add(-time.Hour).UnixMilli(),
+		},
+	}
+	data, _ := json.Marshal(history)
+	if err := os.WriteFile(filepath.Join(dataDir, "messages.json"), data, 0o600); err != nil {
+		t.Fatalf("write messages: %v", err)
+	}
+
+	service, err := newService(dataDir, defaultHTTPPort, defaultUDPPort, "test")
+	if err != nil {
+		t.Fatalf("newService: %v", err)
+	}
+	if service.contacts["11223344"] == nil {
+		t.Fatal("history contact was not restored during upgrade")
+	}
+	item := snapshotPeerByID(service.snapshot(), "11223344")
+	if item == nil || item.Online || !item.HasHistory {
+		t.Fatalf("restored offline contact = %+v, want visible offline history", item)
+	}
+}
+
+func TestOfflineContactWithHistoryRemainsVisible(t *testing.T) {
+	service, err := newService(t.TempDir(), defaultHTTPPort, defaultUDPPort, "test")
+	if err != nil {
+		t.Fatalf("newService: %v", err)
+	}
+	peerID := "11223344"
+	addTestPeer(service, peerID, "离线的同事", "192.168.2.44", strings.Repeat("a", 32))
+	service.touchContactByID(peerID, time.Now().Add(-time.Hour).UnixMilli())
+
+	item := snapshotPeerByID(service.snapshot(), peerID)
+	if item == nil {
+		t.Fatal("offline contact with history disappeared from snapshot")
+	}
+	if item.Online {
+		t.Fatal("offline contact was reported as online")
+	}
+	if !item.HasHistory {
+		t.Fatal("offline contact was not marked as having history")
+	}
+}
+
+func TestClearMessagesOnlyRemovesSelectedContact(t *testing.T) {
+	service, err := newService(t.TempDir(), defaultHTTPPort, defaultUDPPort, "test")
+	if err != nil {
+		t.Fatalf("newService: %v", err)
+	}
+	firstID := "11223344"
+	secondID := "55667788"
+	addTestPeer(service, firstID, "同事 A", "192.168.2.44", strings.Repeat("a", 32))
+	addTestPeer(service, secondID, "同事 B", "192.168.2.55", strings.Repeat("b", 32))
+	service.mu.Lock()
+	service.contacts[firstID] = &contact{ID: firstID, Name: "同事 A"}
+	service.contacts[secondID] = &contact{ID: secondID, Name: "同事 B"}
+	service.messages = []message{
+		{ID: "aabbccdd", Direction: "in", PeerID: firstID, Text: "from A"},
+		{ID: "bbccddee", Direction: "in", PeerID: secondID, Text: "from B"},
+	}
+	service.mu.Unlock()
+
+	payload, _ := json.Marshal(map[string]any{"peerId": firstID})
+	req := httptest.NewRequest(http.MethodPost, "/__ddb/lan/clear", bytes.NewReader(payload))
+	req.RemoteAddr = "127.0.0.1:51234"
+	req.Header.Set("Content-Type", "application/json")
+	result := httptest.NewRecorder()
+	service.routes().ServeHTTP(result, req)
+	if result.Code != http.StatusOK {
+		t.Fatalf("clear status = %d, want 200: %s", result.Code, result.Body.String())
+	}
+
+	service.mu.RLock()
+	defer service.mu.RUnlock()
+	if _, exists := service.contacts[firstID]; exists {
+		t.Fatal("selected contact was not removed")
+	}
+	if _, exists := service.contacts[secondID]; !exists {
+		t.Fatal("unrelated contact was removed")
+	}
+	if len(service.messages) != 1 || service.messages[0].PeerID != secondID {
+		t.Fatalf("messages after clear = %+v, want only the unrelated contact", service.messages)
+	}
+}
+
+func TestAcceptedFileStaysInHistory(t *testing.T) {
+	dataDir := t.TempDir()
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	service, err := newService(dataDir, defaultHTTPPort, defaultUDPPort, "test")
+	if err != nil {
+		t.Fatalf("newService: %v", err)
+	}
+	tempPath := filepath.Join(dataDir, "inbox", "aabbccdd.bin")
+	if err := os.WriteFile(tempPath, []byte("image-bytes"), 0o600); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	service.mu.Lock()
+	service.incoming["aabbccdd"] = &incoming{
+		ID:       "aabbccdd",
+		FromID:   "11223344",
+		FromName: "同事",
+		FileName: "photo.png",
+		Size:     int64(len("image-bytes")),
+		Status:   "pending",
+		At:       time.Now().UnixMilli(),
+		TempPath: tempPath,
+	}
+	service.mu.Unlock()
+
+	payload, _ := json.Marshal(map[string]any{"id": "aabbccdd"})
+	req := httptest.NewRequest(http.MethodPost, "/__ddb/lan/accept", bytes.NewReader(payload))
+	req.RemoteAddr = "127.0.0.1:51234"
+	req.Header.Set("Content-Type", "application/json")
+	result := httptest.NewRecorder()
+	service.routes().ServeHTTP(result, req)
+	if result.Code != http.StatusOK {
+		t.Fatalf("accept status = %d, want 200: %s", result.Code, result.Body.String())
+	}
+
+	service.mu.RLock()
+	stored := service.incoming["aabbccdd"]
+	service.mu.RUnlock()
+	if stored == nil || stored.Status != "saved" || stored.SavedTo == "" {
+		t.Fatalf("saved transfer = %+v, want status saved with destination", stored)
+	}
+	items, _ := service.snapshot()["incoming"].([]incoming)
+	if len(items) != 1 || items[0].Status != "saved" {
+		t.Fatalf("snapshot incoming = %+v, want saved transfer kept", items)
+	}
+}
+
+func TestHiddenBeaconRemovesUnauthorizedContact(t *testing.T) {
+	service, err := newService(t.TempDir(), defaultHTTPPort, defaultUDPPort, "test")
+	if err != nil {
+		t.Fatalf("newService: %v", err)
+	}
+	peerID := "11223344"
+	token := strings.Repeat("a", 32)
+	addTestPeer(service, peerID, "隐藏的同事", "192.168.2.44", token)
+	service.touchContactByID(peerID, time.Now().UnixMilli())
+
+	hidden := beacon{
+		App:      appTag,
+		Version:  protoVersion,
+		ID:       peerID,
+		Name:     "隐藏的同事",
+		IP:       "192.168.2.44",
+		Port:     18190,
+		Token:    token,
+		Private:  true,
+		Audience: service.id,
+		Hidden:   true,
+	}
+	spoofed := hidden
+	spoofed.Token = strings.Repeat("b", 32)
+	if ok, _ := service.absorbBeacon(spoofed, nil); ok {
+		t.Fatal("hidden beacon with an invalid token was accepted")
+	}
+	if ok, _ := service.absorbBeacon(hidden, nil); !ok {
+		t.Fatal("valid hidden beacon was rejected")
+	}
+
+	service.mu.RLock()
+	defer service.mu.RUnlock()
+	if _, exists := service.peers[peerID]; exists {
+		t.Fatal("hidden peer still exists")
+	}
+	if _, exists := service.contacts[peerID]; exists {
+		t.Fatal("hidden contact still exists")
+	}
+}
+
+func TestHiddenBeaconRemovesLegacyContactByAddress(t *testing.T) {
+	service, err := newService(t.TempDir(), defaultHTTPPort, defaultUDPPort, "test")
+	if err != nil {
+		t.Fatalf("newService: %v", err)
+	}
+	peerID := "11223344"
+	service.mu.Lock()
+	service.contacts[peerID] = &contact{ID: peerID, Name: "旧版联系人", IP: "192.168.2.44", Port: 18190}
+	service.mu.Unlock()
+
+	hidden := beacon{
+		App:      appTag,
+		Version:  protoVersion,
+		ID:       peerID,
+		Name:     "旧版联系人",
+		IP:       "192.168.2.44",
+		Port:     18190,
+		Token:    strings.Repeat("a", 32),
+		Private:  true,
+		Audience: service.id,
+		Hidden:   true,
+	}
+	if ok, _ := service.absorbBeacon(hidden, nil); !ok {
+		t.Fatal("legacy contact hidden beacon was rejected")
+	}
+	service.mu.RLock()
+	defer service.mu.RUnlock()
+	if _, exists := service.contacts[peerID]; exists {
+		t.Fatal("legacy hidden contact still exists")
 	}
 }

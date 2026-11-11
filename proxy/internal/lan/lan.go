@@ -38,6 +38,8 @@ const (
 	maxMessageRunes   = 2000
 	maxNameRunes      = 32
 	maxPeers          = 200
+	maxHistoryFiles   = 300
+	maxPreviewBytes   = 20 * 1024 * 1024
 	transferFolder    = "DualDNS Transfers"
 	discoveryDisabled = "未启用"
 )
@@ -54,6 +56,7 @@ type peer struct {
 	Online       bool   `json:"online"`
 	Platform     string `json:"platform"`
 	ReportedIP   string `json:"reportedIp"`
+	HasHistory   bool   `json:"hasHistory,omitempty"`
 	lastRegister int64
 }
 
@@ -67,29 +70,43 @@ type message struct {
 }
 
 type outgoing struct {
-	ID       string `json:"id"`
-	PeerID   string `json:"peerId"`
-	PeerName string `json:"peerName"`
-	FileName string `json:"fileName"`
-	Size     int64  `json:"size"`
-	Done     int64  `json:"done"`
-	Status   string `json:"status"`
-	Error    string `json:"error"`
-	At       int64  `json:"at"`
+	ID         string `json:"id"`
+	PeerID     string `json:"peerId"`
+	PeerName   string `json:"peerName"`
+	FileName   string `json:"fileName"`
+	Size       int64  `json:"size"`
+	Done       int64  `json:"done"`
+	Status     string `json:"status"`
+	Error      string `json:"error"`
+	At         int64  `json:"at"`
+	SourcePath string `json:"sourcePath,omitempty"`
+	Preview    bool   `json:"preview,omitempty"`
 }
 
 type incoming struct {
+	ID           string `json:"id"`
+	FromID       string `json:"fromId"`
+	FromName     string `json:"fromName"`
+	FromIP       string `json:"fromIp"`
+	FromPlatform string `json:"fromPlatform,omitempty"`
+	FileName     string `json:"fileName"`
+	Size         int64  `json:"size"`
+	Status       string `json:"status"`
+	SavedTo      string `json:"savedTo"`
+	At           int64  `json:"at"`
+	TempPath     string `json:"-"`
+	Token        string `json:"-"`
+	Preview      bool   `json:"preview,omitempty"`
+}
+
+type contact struct {
 	ID       string `json:"id"`
-	FromID   string `json:"fromId"`
-	FromName string `json:"fromName"`
-	FromIP   string `json:"fromIp"`
-	FileName string `json:"fileName"`
-	Size     int64  `json:"size"`
-	Status   string `json:"status"`
-	SavedTo  string `json:"savedTo"`
-	At       int64  `json:"at"`
-	TempPath string `json:"-"`
-	Token    string `json:"-"`
+	Name     string `json:"name"`
+	IP       string `json:"ip"`
+	Port     int    `json:"port"`
+	Token    string `json:"token,omitempty"`
+	Platform string `json:"platform"`
+	LastSeen int64  `json:"lastSeen"`
 }
 
 type beacon struct {
@@ -104,6 +121,7 @@ type beacon struct {
 	Platform string `json:"platform"`
 	Private  bool   `json:"private,omitempty"`
 	Audience string `json:"audience,omitempty"`
+	Hidden   bool   `json:"hidden,omitempty"`
 }
 
 type health struct {
@@ -163,6 +181,7 @@ type Service struct {
 	token        string
 	name         string
 	peers        map[string]*peer
+	contacts     map[string]*contact
 	messages     []message
 	outgoing     map[string]*outgoing
 	incoming     map[string]*incoming
@@ -233,6 +252,7 @@ func newService(dataDir string, httpPort, discoveryPort int, version string) (*S
 		discoveryPort: discoveryPort,
 		appVersion:    version,
 		peers:         make(map[string]*peer),
+		contacts:      make(map[string]*contact),
 		outgoing:      make(map[string]*outgoing),
 		incoming:      make(map[string]*incoming),
 		allowed:       make(map[string]allowedPeer),
@@ -263,6 +283,9 @@ func newService(dataDir string, httpPort, discoveryPort int, version string) (*S
 	svc.allIPs, svc.selfIP = localIPv4s()
 	svc.loadMessages()
 	svc.loadIncoming()
+	svc.loadOutgoing()
+	svc.loadContacts()
+	svc.seedContactsFromHistory()
 	return svc, nil
 }
 
@@ -416,6 +439,7 @@ func (s *Service) routes() http.Handler {
 	mux.HandleFunc("/__ddb/lan/accept", s.handleAccept)
 	mux.HandleFunc("/__ddb/lan/discard", s.handleDiscard)
 	mux.HandleFunc("/__ddb/lan/clear", s.handleClearMessages)
+	mux.HandleFunc("/__ddb/lan/preview", s.handlePreview)
 	mux.HandleFunc("/__ddb/lan/shutdown", s.handleShutdown)
 	mux.HandleFunc("/__ddb/lan/incoming-message", s.handleIncomingMessage)
 	mux.HandleFunc("/__ddb/lan/incoming-file", s.handleIncomingFile)
@@ -448,6 +472,7 @@ func controlPath(path string) bool {
 		"/__ddb/lan/accept",
 		"/__ddb/lan/discard",
 		"/__ddb/lan/clear",
+		"/__ddb/lan/preview",
 		"/__ddb/lan/shutdown":
 		return true
 	default:
@@ -549,17 +574,48 @@ func (s *Service) snapshot() map[string]any {
 		DiscoveryMsg: s.discoveryMsg,
 		Downloads:    downloadsDir(),
 	}
-	peers := make([]peer, 0, len(s.peers))
+	peers := make([]peer, 0, len(s.peers)+len(s.contacts))
+	seenPeers := make(map[string]bool, len(s.peers))
 	for _, item := range s.peers {
 		if s.private {
 			if _, allowed := s.allowed[item.ID]; !allowed {
 				continue
 			}
 		}
+		contact := s.contacts[item.ID]
 		copyItem := *item
 		copyItem.Online = now-copyItem.LastSeen < peerOnlineWindow.Milliseconds()
+		copyItem.HasHistory = contact != nil
+		if !copyItem.Online && contact == nil && !item.Manual {
+			_, allowed := s.allowed[item.ID]
+			if !(s.private && allowed) {
+				continue
+			}
+		}
 		copyItem.Token = ""
 		peers = append(peers, copyItem)
+		seenPeers[copyItem.ID] = true
+	}
+	for id, item := range s.contacts {
+		if seenPeers[id] {
+			continue
+		}
+		if s.private {
+			if _, allowed := s.allowed[id]; !allowed {
+				continue
+			}
+		}
+		peers = append(peers, peer{
+			ID:         item.ID,
+			Name:       item.Name,
+			IP:         item.IP,
+			Port:       item.Port,
+			Version:    "",
+			LastSeen:   item.LastSeen,
+			Online:     false,
+			Platform:   item.Platform,
+			HasHistory: true,
+		})
 	}
 	allowedIDs := make([]string, 0, len(s.allowed))
 	for id := range s.allowed {
@@ -573,14 +629,14 @@ func (s *Service) snapshot() map[string]any {
 	messagesOut := append([]message(nil), s.messages...)
 	outgoingOut := make([]outgoing, 0, len(s.outgoing))
 	for _, item := range s.outgoing {
-		outgoingOut = append(outgoingOut, *item)
+		copyItem := *item
+		copyItem.Preview = previewAvailable(copyItem.FileName, copyItem.SourcePath)
+		outgoingOut = append(outgoingOut, copyItem)
 	}
 	incomingOut := make([]incoming, 0, len(s.incoming))
 	for _, item := range s.incoming {
-		if item.Status != "pending" {
-			continue
-		}
 		copyItem := *item
+		copyItem.Preview = previewAvailable(copyItem.FileName, incomingPath(item))
 		copyItem.TempPath = ""
 		copyItem.Token = ""
 		incomingOut = append(incomingOut, copyItem)
@@ -714,6 +770,7 @@ func (s *Service) handlePrivacy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.mu.Unlock()
+	go s.broadcast()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "snapshot": s.snapshot()})
 }
 
@@ -820,6 +877,7 @@ func (s *Service) sendMessage(peerID, text string) (message, error) {
 	if err != nil {
 		return message{}, err
 	}
+	s.touchContact(target, time.Now().UnixMilli())
 	item := message{
 		ID:        randomHex(8),
 		Direction: "out",
@@ -883,6 +941,7 @@ func (s *Service) handleIncomingMessage(w http.ResponseWriter, r *http.Request) 
 	if s.rememberSender(r, body.FromID, name, body.FromIP, body.FromPort, body.FromToken, body.FromRelease, body.FromPlatform) {
 		go s.registerPeer(s.peerBeacon(body.FromID, name, body.FromIP, body.FromPort, body.FromToken, body.FromRelease, body.FromPlatform))
 	}
+	s.touchContactByID(body.FromID, at)
 	item := message{
 		ID:        randomHex(8),
 		Direction: "in",
@@ -900,11 +959,66 @@ func (s *Service) handleClearMessages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "只支持 POST")
 		return
 	}
+	var body struct {
+		PeerID string `json:"peerId"`
+	}
+	if r.ContentLength != 0 {
+		if err := decodeJSON(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	peerID := strings.TrimSpace(body.PeerID)
+	now := time.Now().UnixMilli()
 	s.mu.Lock()
-	s.messages = nil
+	if peerID == "" {
+		for _, item := range s.incoming {
+			_ = os.Remove(item.TempPath)
+		}
+		for _, item := range s.outgoing {
+			s.removeOwnedSourceLocked(item.SourcePath)
+		}
+		s.messages = nil
+		s.incoming = make(map[string]*incoming)
+		s.outgoing = make(map[string]*outgoing)
+		s.contacts = make(map[string]*contact)
+		s.peers = make(map[string]*peer)
+	} else {
+		keptMessages := s.messages[:0]
+		for _, item := range s.messages {
+			if item.PeerID != peerID {
+				keptMessages = append(keptMessages, item)
+			}
+		}
+		s.messages = keptMessages
+		for id, item := range s.incoming {
+			if item.FromID != peerID {
+				continue
+			}
+			_ = os.Remove(item.TempPath)
+			delete(s.incoming, id)
+		}
+		for id, item := range s.outgoing {
+			if item.PeerID != peerID {
+				continue
+			}
+			s.removeOwnedSourceLocked(item.SourcePath)
+			delete(s.outgoing, id)
+		}
+		delete(s.contacts, peerID)
+		if item, ok := s.peers[peerID]; ok {
+			online := now-item.LastSeen < peerOnlineWindow.Milliseconds()
+			if !online {
+				delete(s.peers, peerID)
+			}
+		}
+	}
 	s.persistMessagesLocked()
+	s.persistIncomingLocked()
+	s.persistOutgoingLocked()
+	s.persistContactsLocked()
 	s.mu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "snapshot": s.snapshot()})
 }
 
 func (s *Service) handleShutdown(w http.ResponseWriter, r *http.Request) {
@@ -951,6 +1065,176 @@ func (s *Service) persistMessagesLocked() {
 		return
 	}
 	_ = writeFileAtomic(filepath.Join(s.dataDir, "messages.json"), append(data, '\n'))
+}
+
+func (s *Service) loadContacts() {
+	data, err := os.ReadFile(filepath.Join(s.dataDir, "contacts.json"))
+	if err != nil {
+		return
+	}
+	var items []contact
+	if json.Unmarshal(data, &items) != nil {
+		return
+	}
+	for _, item := range items {
+		item.ID = strings.TrimSpace(item.ID)
+		if !validID(item.ID) || item.ID == s.id {
+			continue
+		}
+		item.Name = cleanName(item.Name)
+		if item.Name == "" {
+			item.Name = "同事"
+		}
+		s.contacts[item.ID] = &item
+	}
+}
+
+func (s *Service) seedContactsFromHistory() {
+	changed := false
+	touch := func(id, name, ip, platform string, at int64) {
+		id = strings.TrimSpace(id)
+		if !validID(id) || id == s.id {
+			return
+		}
+		if _, exists := s.contacts[id]; exists {
+			return
+		}
+		name = cleanName(name)
+		if name == "" {
+			name = "同事"
+		}
+		s.contacts[id] = &contact{
+			ID:       id,
+			Name:     name,
+			IP:       ip,
+			Platform: platform,
+			LastSeen: at,
+		}
+		changed = true
+	}
+	for _, item := range s.messages {
+		touch(item.PeerID, item.PeerName, "", "", item.At)
+	}
+	for _, item := range s.incoming {
+		touch(item.FromID, item.FromName, item.FromIP, item.FromPlatform, item.At)
+	}
+	for _, item := range s.outgoing {
+		touch(item.PeerID, item.PeerName, "", "", item.At)
+	}
+	if changed {
+		s.persistContactsLocked()
+	}
+}
+
+func (s *Service) persistContactsLocked() {
+	items := make([]contact, 0, len(s.contacts))
+	for _, item := range s.contacts {
+		items = append(items, *item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].LastSeen < items[j].LastSeen })
+	if len(items) > maxPeers {
+		items = items[len(items)-maxPeers:]
+	}
+	data, err := json.MarshalIndent(items, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = writeFileAtomic(filepath.Join(s.dataDir, "contacts.json"), append(data, '\n'))
+}
+
+func (s *Service) touchContact(item peer, at int64) {
+	if !validID(item.ID) || item.ID == s.id {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.touchContactLocked(item, at)
+	s.persistContactsLocked()
+}
+
+func (s *Service) touchContactByID(peerID string, at int64) {
+	if !validID(peerID) || peerID == s.id {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if item, ok := s.peers[peerID]; ok {
+		s.touchContactLocked(*item, at)
+		s.persistContactsLocked()
+	}
+}
+
+func (s *Service) touchContactLocked(item peer, at int64) {
+	if !validID(item.ID) || item.ID == s.id {
+		return
+	}
+	entry := s.contacts[item.ID]
+	if entry == nil {
+		entry = &contact{ID: item.ID}
+		s.contacts[item.ID] = entry
+	}
+	if name := cleanName(item.Name); name != "" {
+		entry.Name = name
+	}
+	if entry.Name == "" {
+		entry.Name = "同事"
+	}
+	if item.IP != "" {
+		entry.IP = item.IP
+	}
+	if item.Port > 0 {
+		entry.Port = item.Port
+	}
+	if item.Platform != "" {
+		entry.Platform = item.Platform
+	}
+	if len(item.Token) == 32 {
+		entry.Token = item.Token
+	}
+	entry.LastSeen = at
+}
+
+func (s *Service) removeOwnedSourceLocked(path string) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return
+	}
+	root := filepath.Join(s.dataDir, "outbox")
+	relative, err := filepath.Rel(root, path)
+	if err != nil || strings.HasPrefix(relative, "..") {
+		return
+	}
+	_ = os.Remove(path)
+}
+
+func incomingPath(item *incoming) string {
+	if item == nil {
+		return ""
+	}
+	if item.Status == "pending" {
+		return item.TempPath
+	}
+	if item.Status == "saved" {
+		return item.SavedTo
+	}
+	return ""
+}
+
+func isImageFileName(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp":
+		return true
+	default:
+		return false
+	}
+}
+
+func previewAvailable(name, path string) bool {
+	if !isImageFileName(name) || strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular() && info.Size() > 0 && info.Size() <= maxPreviewBytes
 }
 
 func (s *Service) findPeer(peerID string) (peer, error) {
@@ -1130,6 +1414,31 @@ func (s *Service) absorbBeacon(item beacon, source net.IP) (bool, bool) {
 	if net.ParseIP(ip) == nil {
 		return false, false
 	}
+	if item.Hidden {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		existing := s.peers[item.ID]
+		known := s.contacts[item.ID]
+		if existing == nil && known == nil {
+			return false, false
+		}
+		trusted := existing != nil && tokenEqual(existing.Token, item.Token)
+		if !trusted && known != nil && known.Token != "" {
+			trusted = tokenEqual(known.Token, item.Token)
+		}
+		if !trusted && known != nil && known.Token == "" {
+			// Contacts saved before hidden broadcasts carried a token can
+			// still be removed when the sender's known address matches.
+			trusted = known.IP == item.IP || (source != nil && known.IP == source.String())
+		}
+		if !trusted {
+			return false, false
+		}
+		delete(s.peers, item.ID)
+		delete(s.contacts, item.ID)
+		s.persistContactsLocked()
+		return true, false
+	}
 	now := time.Now().UnixMilli()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1185,9 +1494,27 @@ func (s *Service) broadcast() {
 	s.mu.RLock()
 	private := s.private
 	targets := make([]allowedPeer, 0, len(s.allowed))
+	hiddenTargets := make([]allowedPeer, 0, len(s.peers)+len(s.contacts))
 	if private {
 		for _, entry := range s.allowed {
 			targets = append(targets, entry)
+		}
+		seen := make(map[string]bool, len(s.allowed))
+		for id := range s.allowed {
+			seen[id] = true
+		}
+		appendHidden := func(id, name, ip string, port int) {
+			if !validID(id) || id == s.id || seen[id] || net.ParseIP(ip) == nil || port < 1024 || port > 65535 {
+				return
+			}
+			seen[id] = true
+			hiddenTargets = append(hiddenTargets, allowedPeer{ID: id, Name: name, IP: ip, Port: port})
+		}
+		for id, item := range s.peers {
+			appendHidden(id, item.Name, item.IP, item.Port)
+		}
+		for id, item := range s.contacts {
+			appendHidden(id, item.Name, item.IP, item.Port)
 		}
 	}
 	s.mu.RUnlock()
@@ -1197,6 +1524,11 @@ func (s *Service) broadcast() {
 			if item.IP == "" || net.ParseIP(entry.IP) == nil || entry.Port < 1024 {
 				continue
 			}
+			s.sendBeaconUDP(net.ParseIP(entry.IP), item)
+		}
+		for _, entry := range hiddenTargets {
+			item := s.ownBeaconFor(entry.ID)
+			item.Hidden = true
 			s.sendBeaconUDP(net.ParseIP(entry.IP), item)
 		}
 		return
@@ -1345,7 +1677,6 @@ func (s *Service) rememberSender(r *http.Request, id, name, reportedIP string, p
 
 func (s *Service) prunePeers() {
 	cutoff := time.Now().Add(-peerKeepWindow).UnixMilli()
-	transferCutoff := time.Now().Add(-10 * time.Minute).UnixMilli()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id, item := range s.peers {
@@ -1355,11 +1686,6 @@ func (s *Service) prunePeers() {
 		}
 		if item.LastSeen < cutoff {
 			delete(s.peers, id)
-		}
-	}
-	for id, item := range s.outgoing {
-		if item.Status != "sending" && item.At < transferCutoff {
-			delete(s.outgoing, id)
 		}
 	}
 }
@@ -1375,13 +1701,21 @@ func (s *Service) loadIncoming() {
 	}
 	kept := items[:0]
 	for _, item := range items {
-		if item.Status != "pending" {
-			continue
-		}
-		if info, err := os.Stat(item.TempPath); err != nil || !info.Mode().IsRegular() {
-			continue
+		item.TempPath = strings.TrimSpace(item.TempPath)
+		item.SavedTo = strings.TrimSpace(item.SavedTo)
+		if item.Status == "pending" {
+			if item.TempPath == "" {
+				item.Status = "missing"
+			} else if info, err := os.Stat(item.TempPath); err != nil || !info.Mode().IsRegular() {
+				item.Status = "missing"
+				item.TempPath = ""
+			}
 		}
 		kept = append(kept, item)
+	}
+	sort.Slice(kept, func(i, j int) bool { return kept[i].At < kept[j].At })
+	if len(kept) > maxHistoryFiles {
+		kept = kept[len(kept)-maxHistoryFiles:]
 	}
 	for index := range kept {
 		s.incoming[kept[index].ID] = &kept[index]
@@ -1391,16 +1725,56 @@ func (s *Service) loadIncoming() {
 func (s *Service) persistIncomingLocked() {
 	items := make([]incoming, 0, len(s.incoming))
 	for _, item := range s.incoming {
-		if item.Status == "pending" {
-			items = append(items, *item)
-		}
+		items = append(items, *item)
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].At < items[j].At })
+	if len(items) > maxHistoryFiles {
+		items = items[len(items)-maxHistoryFiles:]
+	}
 	data, err := json.MarshalIndent(items, "", "  ")
 	if err != nil {
 		return
 	}
 	_ = writeFileAtomic(filepath.Join(s.dataDir, "incoming.json"), append(data, '\n'))
+}
+
+func (s *Service) loadOutgoing() {
+	data, err := os.ReadFile(filepath.Join(s.dataDir, "outgoing.json"))
+	if err != nil {
+		return
+	}
+	var items []outgoing
+	if json.Unmarshal(data, &items) != nil {
+		return
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].At < items[j].At })
+	if len(items) > maxHistoryFiles {
+		items = items[len(items)-maxHistoryFiles:]
+	}
+	for index := range items {
+		item := &items[index]
+		if item.Status == "sending" {
+			item.Status = "error"
+			item.Error = "应用已重启，传输中断"
+		}
+		s.outgoing[item.ID] = item
+	}
+}
+
+func (s *Service) persistOutgoingLocked() {
+	items := make([]outgoing, 0, len(s.outgoing))
+	for _, item := range s.outgoing {
+		items = append(items, *item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].At < items[j].At })
+	if len(items) > maxHistoryFiles {
+		items = items[len(items)-maxHistoryFiles:]
+	}
+	data, err := json.MarshalIndent(items, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = writeFileAtomic(filepath.Join(s.dataDir, "outgoing.json"), append(data, '\n'))
 }
 
 func broadcastTargets() []net.IP {

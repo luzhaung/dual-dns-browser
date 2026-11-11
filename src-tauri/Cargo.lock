@@ -869,8 +869,9 @@ dependencies = [
 
 [[package]]
 name = "dual-dns-browser"
-version = "1.2.5"
+version = "1.2.6"
 dependencies = [
+ "base64 0.22.1",
  "serde",
  "serde_json",
  "sha2",

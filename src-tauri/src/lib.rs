@@ -1697,13 +1697,83 @@ fn quit_app(app: &AppHandle) {
 }
 
 #[tauri::command]
-fn ui_ready(app: AppHandle) {
+fn ui_ready(app: AppHandle, dark: Option<bool>) {
     let state = app.state::<AppState>();
     state.ui_ready.store(true, Ordering::SeqCst);
+    if let Some(dark) = dark {
+        let _ = apply_window_theme(&app, dark);
+    }
     if !state.hidden_by_user.load(Ordering::SeqCst) {
         show_main_window(&app);
     }
     prewarm_proxies(app.clone());
+}
+
+fn apply_window_theme(app: &AppHandle, dark: bool) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "主窗口不存在".to_string())?;
+    let theme = if dark {
+        tauri::Theme::Dark
+    } else {
+        tauri::Theme::Light
+    };
+    let _ = window
+        .set_theme(Some(theme))
+        .map_err(|error| format!("设置窗口主题失败: {error}"));
+    #[cfg(target_os = "macos")]
+    {
+        let _ = window.set_background_color(Some(if dark {
+            tauri::window::Color(11, 16, 24, 255)
+        } else {
+            tauri::window::Color(244, 246, 250, 255)
+        }));
+        apply_native_window_theme(&window, dark)?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn apply_native_window_theme(window: &tauri::WebviewWindow, dark: bool) -> Result<(), String> {
+    use objc2_app_kit::{
+        NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
+        NSColor, NSWindow,
+    };
+
+    let ns_window = window
+        .ns_window()
+        .map_err(|error| format!("获取原生窗口失败: {error}"))? as *mut NSWindow;
+    if ns_window.is_null() {
+        return Err("获取原生窗口失败: 空指针".to_string());
+    }
+    unsafe {
+        let name = if dark {
+            NSAppearanceNameDarkAqua
+        } else {
+            NSAppearanceNameAqua
+        };
+        let ns_window = &*ns_window;
+        let appearance = NSAppearance::appearanceNamed(name);
+        NSAppearanceCustomization::setAppearance(ns_window, appearance.as_deref());
+        let background = if dark {
+            NSColor::colorWithSRGBRed_green_blue_alpha(11.0 / 255.0, 16.0 / 255.0, 24.0 / 255.0, 1.0)
+        } else {
+            NSColor::colorWithSRGBRed_green_blue_alpha(
+                244.0 / 255.0,
+                246.0 / 255.0,
+                250.0 / 255.0,
+                1.0,
+            )
+        };
+        ns_window.setBackgroundColor(Some(&background));
+        ns_window.invalidateShadow();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_window_theme(app: AppHandle, dark: bool) -> Result<(), String> {
+    apply_window_theme(&app, dark)
 }
 
 #[tauri::command]
@@ -2297,6 +2367,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_settings,
             ui_ready,
+            set_window_theme,
             save_settings,
             open_env,
             get_status,

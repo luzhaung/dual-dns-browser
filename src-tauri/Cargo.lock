@@ -869,9 +869,11 @@ dependencies = [
 
 [[package]]
 name = "dual-dns-browser"
-version = "1.2.9"
+version = "1.2.10"
 dependencies = [
  "base64 0.22.1",
+ "objc2",
+ "objc2-app-kit",
  "serde",
  "serde_json",
  "sha2",

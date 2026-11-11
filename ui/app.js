@@ -159,7 +159,7 @@ let updateBusy = false;
 let updateInstallBusy = false;
 let updateInstallLink = null;
 let updateSource = readStorage("dualdns.updateSource", "auto");
-let currentVersion = "1.2.9";
+let currentVersion = "1.2.10";
 let currentPlatformLabel = "";
 let dismissedUpdate = readStorage("dualdns.dismissedUpdate", "");
 let currentView = "browser";
@@ -224,6 +224,7 @@ function applyTheme(theme, persist) {
   root.dataset.themeSource = persist ? "manual" : "system";
   const colorScheme = document.querySelector('meta[name="color-scheme"]');
   if (colorScheme) colorScheme.content = dark ? "dark" : "light";
+  invoke?.("set_window_theme", { dark }).catch(() => {});
   if (persist) writeStorage("dual-dns-theme", dark ? "dark" : "light");
   const nextLabel = dark ? "切换到日间模式" : "切换到夜间模式";
   themeBtn.setAttribute("aria-label", nextLabel);
@@ -2658,7 +2659,10 @@ if (!/Mac|iPhone|iPad/.test(navigator.platform)) {
 function notifyUiReady() {
   if (!invoke) return;
   const send = () => {
-    window.setTimeout(() => invoke("ui_ready").catch(() => {}), 80);
+    window.setTimeout(
+      () => invoke("ui_ready", { dark: activeTheme() === "dark" }).catch(() => {}),
+      80,
+    );
   };
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", send, { once: true });

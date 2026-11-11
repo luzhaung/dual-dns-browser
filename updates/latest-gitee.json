@@ -1,21 +1,21 @@
 {
-  "version": "1.2.9",
-  "published_at": "2026-11-11T12:44:32.781Z",
-  "notes": "## v1.2.9\n\n优化局域网快传的状态识别和聊天交互细节。\n\n- 在线 / 离线电脑卡片使用统一底色，离线卡片改为更暗的背景、弱化的文字和灰色状态胶囊，在线状态显示为绿色胶囊，一眼即可区分。\n- 隐身模式可见名单与主界面的电脑卡片统一背景和状态样式，修复夜间模式下离线文字仍显示绿色的问题。\n- 选中离线电脑时保留清晰的蓝色选中描边，不会因为离线样式而看不出当前选择。\n- 提高所有局域网输入框获得焦点时的边框亮度和蓝色光晕，明暗主题下都更容易辨认。\n- 发送消息、切换聊天对象或图片加载完成后可靠滚动到会话底部；用户正在查看历史消息时不会被新消息强行拉回底部。",
-  "release_page": "https://gitee.com/phpbest/dual-dns-browser/releases/tag/v1.2.9",
+  "version": "1.2.10",
+  "published_at": "2026-11-11T15:01:20.219Z",
+  "notes": "## v1.2.10\n\n修复 macOS 夜间模式下窗口边框和标题栏仍是白色的问题。\n\n- macOS 现在直接同步原生窗口外观，夜间模式下标题栏、窗口外框和圆角区域都会变暗，不再出现白色边框。\n- 切换夜间 / 日间模式时，标题栏和外框立即跟随变化，无需重启应用。\n- 窗口会在主题应用后再显示，减少启动时的白色闪屏。",
+  "release_page": "https://gitee.com/phpbest/dual-dns-browser/releases/tag/v1.2.10",
   "downloads": {
-    "macos-aarch64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.9/DualDNS-Browser-1.2.9-macOS-AppleSilicon.dmg",
-    "macos-x86_64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.9/DualDNS-Browser-1.2.9-macOS-Intel.dmg",
-    "windows-x86_64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.9/DualDNS-Browser-1.2.9-Windows-x64-Setup.exe"
+    "macos-aarch64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.10/DualDNS-Browser-1.2.10-macOS-AppleSilicon.dmg",
+    "macos-x86_64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.10/DualDNS-Browser-1.2.10-macOS-Intel.dmg",
+    "windows-x86_64": "https://gitee.com/phpbest/dual-dns-browser/releases/download/v1.2.10/DualDNS-Browser-1.2.10-Windows-x64-Setup.exe"
   },
   "checksums": {
-    "macos-aarch64": "6954b1e4485300f9b306feb12c84251aab6b1f1c0f889aaab15f4be2b430af8e",
-    "macos-x86_64": "35becfd1275dc89e3a876bf9a0628af384c55cca5f9301f7a6baae1740b0ccc0",
-    "windows-x86_64": "aa6645b9ca558a6ddbff931ca0c87c69f5b0be9815ae5649153077aa3b511380"
+    "macos-aarch64": "a8d0ae3d94b5fbc0c6f65efff39cd61ea8c60e8cadb19a44a04185d3bbacce37",
+    "macos-x86_64": "e227971c9cc0b8ddb0db6a60c32bc7ff010f0207f15c3d82a3e34c634f79222f",
+    "windows-x86_64": "ec79736d54ea384f481a1f115f26d4a1f543e61ee35d9f1aad40b575f8ca61ac"
   },
   "sizes": {
-    "macos-aarch64": 5903526,
-    "macos-x86_64": 6507047,
-    "windows-x86_64": 4507302
+    "macos-aarch64": 5902476,
+    "macos-x86_64": 6509887,
+    "windows-x86_64": 4510165
   }
 }

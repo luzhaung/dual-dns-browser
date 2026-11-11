@@ -2232,7 +2232,8 @@ html[data-platform="windows"] .toast {
 
 .lan-name-input:focus {
   outline: none;
-  border-color: var(--internal-ring);
+  border-color: rgba(47, 123, 255, 0.72);
+  box-shadow: 0 0 0 3px rgba(47, 123, 255, 0.18);
 }
 
 .lan-self-actions {
@@ -2387,9 +2388,9 @@ html[data-platform="windows"] .toast {
 }
 
 .lan-peer-search:focus-within {
-  border-color: rgba(47, 123, 255, 0.42);
+  border-color: rgba(47, 123, 255, 0.72);
   background: #fff;
-  box-shadow: 0 0 0 3px rgba(47, 123, 255, 0.09);
+  box-shadow: 0 0 0 3px rgba(47, 123, 255, 0.18);
 }
 
 .lan-peer-search svg {
@@ -2432,6 +2433,20 @@ html[data-platform="windows"] .toast {
 
 .lan-peer:hover {
   background: #fff;
+}
+
+.lan-peer.offline {
+  border-color: rgba(19, 35, 60, 0.05);
+  background: rgba(243, 246, 251, 0.9);
+}
+
+.lan-peer.offline .lan-peer-main strong {
+  color: #7f8b9d;
+  font-weight: 600;
+}
+
+.lan-peer.offline .lan-peer-detail {
+  color: #a6b0c0;
 }
 
 .lan-peer.selected {
@@ -2508,20 +2523,38 @@ html[data-platform="windows"] .toast {
 
 .lan-peer-status {
   display: inline-flex;
+  flex: none;
   align-items: center;
   gap: 4px;
+  padding: 2px 7px 2px 6px;
+  border-radius: 999px;
+  color: #12805a;
+  background: rgba(28, 180, 124, 0.10);
+  font-size: 9.5px;
+  font-weight: 650;
+  line-height: 1.2;
 }
 
 .lan-peer-status::before {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: #1cb47c;
+  background: #16a874;
   content: "";
 }
 
+.lan-peer-status.online::before {
+  box-shadow: 0 0 0 2px rgba(28, 180, 124, 0.14);
+}
+
+.lan-peer-status.offline {
+  color: #8b97a9;
+  background: rgba(122, 138, 160, 0.10);
+}
+
 .lan-peer-status.offline::before {
-  background: #b7c0cd;
+  background: #b3bdcb;
+  box-shadow: none;
 }
 
 .lan-peer-actions {
@@ -2576,8 +2609,8 @@ html[data-platform="windows"] .toast {
 
 .lan-add input:focus,
 .lan-composer input:focus {
-  border-color: rgba(47, 123, 255, 0.45);
-  box-shadow: 0 0 0 3px rgba(47, 123, 255, 0.10);
+  border-color: rgba(47, 123, 255, 0.72);
+  box-shadow: 0 0 0 3px rgba(47, 123, 255, 0.18);
 }
 
 .lan-add-btn {
@@ -3325,7 +3358,7 @@ html[data-platform="windows"] .toast {
   padding: 9px 10px;
   border: 1px solid rgba(19, 35, 60, 0.07);
   border-radius: 11px;
-  background: rgba(248, 250, 253, 0.82);
+  background: rgba(255, 255, 255, 0.72);
   cursor: pointer;
   transition: border-color 150ms ease, background 150ms ease;
 }
@@ -3333,6 +3366,20 @@ html[data-platform="windows"] .toast {
 .lan-privacy-device:hover {
   border-color: rgba(44, 98, 214, 0.2);
   background: #fff;
+}
+
+.lan-privacy-device.offline {
+  border-color: rgba(19, 35, 60, 0.05);
+  background: rgba(243, 246, 251, 0.9);
+}
+
+.lan-privacy-device.offline .lan-privacy-device-main strong {
+  color: #7f8b9d;
+  font-weight: 600;
+}
+
+.lan-privacy-device.offline .lan-privacy-device-main span {
+  color: #a6b0c0;
 }
 
 .lan-privacy-device.checked {
@@ -3374,14 +3421,39 @@ html[data-platform="windows"] .toast {
 }
 
 .lan-privacy-device-status {
+  display: inline-flex;
   flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px 2px 6px;
+  border-radius: 999px;
   color: #1a8a63;
+  background: rgba(28, 180, 124, 0.10);
   font-size: 9.5px;
   font-weight: 650;
+  line-height: 1.2;
+}
+
+.lan-privacy-device-status::before {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #16a874;
+  content: "";
+}
+
+.lan-privacy-device-status.online::before {
+  box-shadow: 0 0 0 2px rgba(28, 180, 124, 0.14);
 }
 
 .lan-privacy-device-status.offline {
-  color: var(--ink-faint);
+  color: #8b97a9;
+  background: rgba(122, 138, 160, 0.10);
+}
+
+.lan-privacy-device-status.offline::before {
+  background: #b3bdcb;
+  box-shadow: none;
 }
 
 .lan-privacy-tip {
@@ -3472,8 +3544,8 @@ html[data-platform="windows"] .toast {
 }
 
 .lan-note-field input:focus {
-  border-color: rgba(47, 123, 255, 0.45);
-  box-shadow: 0 0 0 3px rgba(47, 123, 255, 0.10);
+  border-color: rgba(47, 123, 255, 0.72);
+  box-shadow: 0 0 0 3px rgba(47, 123, 255, 0.18);
 }
 
 .lan-note-body .lan-privacy-actions {
@@ -4076,6 +4148,11 @@ html[data-platform="windows"] .toast {
   box-shadow: 0 0 0 3px rgba(93, 147, 255, 0.13);
 }
 
+:root[data-theme="dark"] .lan-name-input:focus {
+  border-color: rgba(122, 167, 255, 0.85);
+  box-shadow: 0 0 0 3px rgba(93, 147, 255, 0.24);
+}
+
 :root[data-theme="dark"] .lan-chip {
   border-color: var(--line);
   background: rgba(255, 255, 255, 0.05);
@@ -4103,7 +4180,9 @@ html[data-platform="windows"] .toast {
 }
 
 :root[data-theme="dark"] .lan-peer-search:focus-within {
+  border-color: rgba(122, 167, 255, 0.85);
   background: #1c2634;
+  box-shadow: 0 0 0 3px rgba(93, 147, 255, 0.22);
 }
 
 :root[data-theme="dark"] .lan-peer-search svg {
@@ -4117,6 +4196,19 @@ html[data-platform="windows"] .toast {
 :root[data-theme="dark"] .lan-peer {
   border-color: var(--line);
   background: rgba(255, 255, 255, 0.035);
+}
+
+:root[data-theme="dark"] .lan-peer.offline {
+  border-color: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.016);
+}
+
+:root[data-theme="dark"] .lan-peer.offline .lan-peer-main strong {
+  color: #8592a6;
+}
+
+:root[data-theme="dark"] .lan-peer.offline .lan-peer-detail {
+  color: #6f7c90;
 }
 
 :root[data-theme="dark"] .lan-peer:hover {
@@ -4137,6 +4229,20 @@ html[data-platform="windows"] .toast {
 :root[data-theme="dark"] .lan-peer.offline .lan-peer-avatar {
   color: var(--ink-faint);
   background: rgba(255, 255, 255, 0.06);
+}
+
+:root[data-theme="dark"] .lan-peer-status {
+  color: #6fe0b2;
+  background: rgba(46, 196, 140, 0.13);
+}
+
+:root[data-theme="dark"] .lan-peer-status.offline {
+  color: #8b98ab;
+  background: rgba(150, 170, 200, 0.10);
+}
+
+:root[data-theme="dark"] .lan-peer-status.offline::before {
+  background: #7c8a9f;
 }
 
 :root[data-theme="dark"] .lan-peer-actions button {
@@ -4161,6 +4267,12 @@ html[data-platform="windows"] .toast {
   color: var(--ink);
   border-color: var(--line);
   background: rgba(255, 255, 255, 0.055);
+}
+
+:root[data-theme="dark"] .lan-add input:focus,
+:root[data-theme="dark"] .lan-composer input:focus {
+  border-color: rgba(122, 167, 255, 0.85);
+  box-shadow: 0 0 0 3px rgba(93, 147, 255, 0.22);
 }
 
 :root[data-theme="dark"] .lan-message {
@@ -4327,23 +4439,52 @@ html[data-platform="windows"] .toast {
   background: #1a2331;
 }
 
+:root[data-theme="dark"] .lan-privacy-search:focus-within {
+  border-color: rgba(122, 167, 255, 0.85);
+  background: #1c2634;
+  box-shadow: 0 0 0 3px rgba(93, 147, 255, 0.22);
+}
+
 :root[data-theme="dark"] .lan-privacy-device {
   border-color: var(--line);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+:root[data-theme="dark"] .lan-privacy-device.offline {
+  border-color: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.016);
+}
+
+:root[data-theme="dark"] .lan-privacy-device.offline .lan-privacy-device-main strong {
+  color: #8592a6;
+}
+
+:root[data-theme="dark"] .lan-privacy-device.offline .lan-privacy-device-main span {
+  color: #6f7c90;
 }
 
 :root[data-theme="dark"] .lan-privacy-device:hover {
   border-color: rgba(93, 147, 255, 0.32);
-  background: rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.065);
 }
 
 :root[data-theme="dark"] .lan-privacy-device.checked {
   border-color: rgba(93, 147, 255, 0.4);
-  background: rgba(93, 147, 255, 0.11);
+  background: rgba(93, 147, 255, 0.1);
 }
 
 :root[data-theme="dark"] .lan-privacy-device-status {
-  color: #4fd2a0;
+  color: #6fe0b2;
+  background: rgba(46, 196, 140, 0.13);
+}
+
+:root[data-theme="dark"] .lan-privacy-device-status.offline {
+  color: #8b98ab;
+  background: rgba(150, 170, 200, 0.10);
+}
+
+:root[data-theme="dark"] .lan-privacy-device-status.offline::before {
+  background: #7c8a9f;
 }
 
 :root[data-theme="dark"] .lan-privacy-cancel {
@@ -4371,6 +4512,11 @@ html[data-platform="windows"] .toast {
   color: var(--ink);
   border-color: var(--line);
   background: #1a2331;
+}
+
+:root[data-theme="dark"] .lan-note-field input:focus {
+  border-color: rgba(122, 167, 255, 0.85);
+  box-shadow: 0 0 0 3px rgba(93, 147, 255, 0.24);
 }
 
 :root[data-theme="dark"] .lan-note-remove {

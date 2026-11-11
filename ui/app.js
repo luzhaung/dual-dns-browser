@@ -159,7 +159,7 @@ let updateBusy = false;
 let updateInstallBusy = false;
 let updateInstallLink = null;
 let updateSource = readStorage("dualdns.updateSource", "auto");
-let currentVersion = "1.2.8";
+let currentVersion = "1.2.9";
 let currentPlatformLabel = "";
 let dismissedUpdate = readStorage("dualdns.dismissedUpdate", "");
 let currentView = "browser";
@@ -1173,7 +1173,7 @@ function renderLanPeers(peers) {
 
     const status = lanElement(
       "span",
-      `lan-peer-status${peer.online ? "" : " offline"}`,
+      `lan-peer-status${peer.online ? " online" : " offline"}`,
       peer.online ? "在线" : "离线",
     );
     const actions = lanElement("span", "lan-peer-actions");
@@ -1273,7 +1273,10 @@ function renderLanPrivacyList() {
 
   filtered.forEach((peer) => {
     const checked = lanPrivacyDraftAllowed.has(peer.id);
-    const row = lanElement("label", `lan-privacy-device${checked ? " checked" : ""}`);
+    const row = lanElement(
+      "label",
+      `lan-privacy-device${checked ? " checked" : ""}${peer.online ? "" : " offline"}`,
+    );
     const input = document.createElement("input");
     input.type = "checkbox";
     input.checked = checked;
@@ -1298,7 +1301,7 @@ function renderLanPrivacyList() {
     main.appendChild(lanElement("span", "", detail.join(" · ")));
     const status = lanElement(
       "span",
-      `lan-privacy-device-status${peer.online ? "" : " offline"}`,
+      `lan-privacy-device-status${peer.online ? " online" : " offline"}`,
       peer.online ? "在线" : "离线",
     );
     row.append(input, main, status);
@@ -1510,6 +1513,9 @@ function lanPreviewImage(src) {
   image.alt = "聊天图片";
   image.loading = "lazy";
   image.addEventListener("click", () => openLanImageLightbox(src));
+  image.addEventListener("load", () => {
+    if (lanMessagesPinned) scrollLanMessagesToBottom();
+  });
   return image;
 }
 
@@ -1617,6 +1623,26 @@ function renderLanFileMessage(item, direction) {
   return row;
 }
 
+let lanMessagesPinned = true;
+
+function scrollLanMessagesToBottom() {
+  lanMessages.scrollTop = lanMessages.scrollHeight;
+}
+
+function pinLanMessagesToBottom() {
+  lanMessagesPinned = true;
+  scrollLanMessagesToBottom();
+  window.requestAnimationFrame(() => {
+    scrollLanMessagesToBottom();
+    window.requestAnimationFrame(scrollLanMessagesToBottom);
+  });
+}
+
+lanMessages.addEventListener("scroll", () => {
+  lanMessagesPinned =
+    lanMessages.scrollHeight - lanMessages.scrollTop - lanMessages.clientHeight < 48;
+}, { passive: true });
+
 function renderLanMessages(messages, incoming, outgoing) {
   const peer = selectedLanPeer();
   const visibleMessages = peer
@@ -1650,6 +1676,7 @@ function renderLanMessages(messages, incoming, outgoing) {
     || (last?.kind === "file" && last.direction === "out");
   lanMessageSignature = signature;
   lanMessages.textContent = "";
+  lanMessagesPinned = shouldStick;
 
   if (!peer) {
     lanMessages.appendChild(lanElement(
@@ -1686,7 +1713,7 @@ function renderLanMessages(messages, incoming, outgoing) {
     item.append(head, lanElement("div", "lan-message-body", message.text || ""));
     lanMessages.appendChild(item);
   });
-  if (shouldStick) lanMessages.scrollTop = lanMessages.scrollHeight;
+  if (shouldStick) pinLanMessagesToBottom();
 }
 
 function truncateLanText(text, limit) {

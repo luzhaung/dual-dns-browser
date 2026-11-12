@@ -152,7 +152,6 @@ func (s *Service) doUpload(id string, target peer, reader io.Reader, fileName st
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		s.markPeerOffline(target.ID)
 		return fmt.Errorf("传输出错，可能不在同一局域网或被防火墙拦截: %w", err)
 	}
 	defer resp.Body.Close()

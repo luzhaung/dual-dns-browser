@@ -159,7 +159,7 @@ let updateBusy = false;
 let updateInstallBusy = false;
 let updateInstallLink = null;
 let updateSource = readStorage("dualdns.updateSource", "auto");
-let currentVersion = "1.2.10";
+let currentVersion = "1.2.11";
 let currentPlatformLabel = "";
 let dismissedUpdate = readStorage("dualdns.dismissedUpdate", "");
 let currentView = "browser";
@@ -185,7 +185,11 @@ let lanImageLightboxReturnFocus = null;
 let lanPasteBusy = false;
 let lanAttentionCount = 0;
 let lanPeerUnread = new Map();
+let lanBadgeCount = -1;
+let lanPeerSignature = "";
 let lanMessageSignature = "";
+let lanSendState = "idle";
+let lanSendResetTimer = null;
 let lanPermissionReturnFocus = null;
 let lanNoteReturnFocus = null;
 let lanNotePeerId = "";
@@ -1018,6 +1022,16 @@ function updateLanAttention() {
   tabLan.title = visible
     ? `有 ${lanAttentionCount} 条新的局域网消息或待接收文件`
     : "查看同一局域网内的同事";
+  syncUnreadBadge();
+}
+
+function syncUnreadBadge() {
+  const total = Array.from(lanPeerUnread.values())
+    .reduce((sum, count) => sum + Math.max(0, Number(count) || 0), 0);
+  if (total === lanBadgeCount) return;
+  lanBadgeCount = total;
+  if (!invoke) return;
+  invoke("set_unread_badge", { count: total }).catch(() => {});
 }
 
 function syncLanAttention(data) {
@@ -1065,14 +1079,14 @@ function renderLanTargets() {
   const privateMode = Boolean(lanSnapshotData?.privacy?.enabled);
   lanChatTitle.textContent = peer ? `和 ${lanPeerLabel(peer)} 聊天` : "选择同事开始聊天";
   lanChatTitle.title = peer?.name && lanPeerNote(peer.id) ? `电脑名称：${peer.name}` : "";
-  lanSendMessage.disabled = !online || lanActionBusy;
+  lanSendMessage.disabled = !peer || lanActionBusy || lanSendState !== "idle";
   lanPickFiles.disabled = !online || lanActionBusy;
-  lanMessageInput.disabled = !online || lanActionBusy;
+  lanMessageInput.disabled = !peer || lanActionBusy;
   lanMessageInput.placeholder = !peer
     ? "先选择上面的同事"
     : online
       ? "输入消息，回车发送；可直接粘贴图片"
-      : "对方当前离线，上线后即可发送";
+      : "对方状态暂不可用，仍可尝试发送；失败会提示";
   lanClearMessages.disabled = !peer || lanActionBusy;
   lanAddIp.disabled = privateMode;
   lanAddBtn.disabled = lanActionBusy || privateMode;
@@ -1093,6 +1107,7 @@ function selectLanPeer(peerId, options = {}) {
     lanSnapshotData.outgoing,
   );
   renderLanTargets();
+  updateLanAttention();
   if (options.focusMessage) {
     lanMessageInput.focus();
   }
@@ -1106,6 +1121,28 @@ function renderLanPeers(peers) {
     lanSelectedPeerId = "";
     lanMessageSignature = "";
   }
+  const peerSignature = [
+    lanSelectedPeerId,
+    lanPeerQuery,
+    lanSnapshotData?.privacy?.enabled ? 1 : 0,
+    peers.map((peer) => [
+      peer.id,
+      peer.name,
+      peer.online ? 1 : 0,
+      peer.ip,
+      peer.port,
+      peer.platform,
+      peer.manual ? 1 : 0,
+      peer.hasHistory ? 1 : 0,
+      lanPeerNote(peer.id),
+      lanPeerUnreadCount(peer.id),
+    ].join(",")).join("|"),
+  ].join("::");
+  if (peerSignature === lanPeerSignature) {
+    renderLanTargets();
+    return;
+  }
+  lanPeerSignature = peerSignature;
   const online = peers.filter((peer) => peer.online).length;
   const filtered = peers.filter((peer) => lanPeerMatches(peer, lanPeerQuery));
   lanPeerCount.textContent = lanPeerQuery.trim()
@@ -1811,6 +1848,7 @@ function renderLanFailure(message) {
     lanDiscovery.textContent = "自动发现：未连接";
     lanVersion.textContent = "—";
     lanPeerCount.textContent = "0 台在线";
+    lanPeerSignature = "";
     lanPeerList.textContent = "";
     lanPeerList.appendChild(lanElement("div", "lan-empty", message));
   }
@@ -1883,9 +1921,9 @@ function setView(view) {
       lanPeerUnread.delete(lanSelectedPeerId);
       if (Array.isArray(lanSnapshotData?.peers)) renderLanPeers(lanSnapshotData.peers);
     }
-    updateLanAttention();
     refreshLan({ silent: false });
   }
+  updateLanAttention();
   scheduleLanPolling();
 }
 
@@ -1897,16 +1935,43 @@ function setLanActionBusy(value) {
   renderLanTargets();
 }
 
+function setLanSendState(state) {
+  lanSendState = state;
+  if (lanSendResetTimer) {
+    window.clearTimeout(lanSendResetTimer);
+    lanSendResetTimer = null;
+  }
+  lanSendMessage.classList.toggle("loading", state === "loading");
+  lanSendMessage.classList.toggle("success", state === "success");
+  lanSendMessage.setAttribute("aria-busy", state === "loading" ? "true" : "false");
+  if (state === "idle") {
+    lanSendMessage.textContent = "发送";
+    lanSendMessage.setAttribute("aria-label", "发送消息");
+  } else if (state === "loading") {
+    lanSendMessage.innerHTML =
+      '<svg class="lan-send-spinner" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="30 14"/></svg>';
+    lanSendMessage.setAttribute("aria-label", "正在发送");
+    lanSendMessage.title = "正在发送";
+  } else {
+    lanSendMessage.innerHTML =
+      '<svg class="lan-send-check" viewBox="0 0 20 20" aria-hidden="true"><path d="m5 10.5 3.2 3.2L15 6.9" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    lanSendMessage.setAttribute("aria-label", "发送成功");
+    lanSendMessage.title = "发送成功";
+    lanSendResetTimer = window.setTimeout(() => {
+      lanSendResetTimer = null;
+      if (lanSendState === "success") setLanSendState("idle");
+    }, 900);
+  }
+  if (state === "idle") lanSendMessage.removeAttribute("title");
+  renderLanTargets();
+}
+
 async function sendLanMessage() {
-  if (lanActionBusy) return;
+  if (lanActionBusy || lanSendState !== "idle") return;
   const peer = selectedLanPeer();
   const text = lanMessageInput.value.trim();
   if (!peer) {
     showToast("请先选择一个同事的设备", "error");
-    return;
-  }
-  if (!peer.online) {
-    showToast(`${lanPeerLabel(peer)} 当前离线，无法发送消息`, "error");
     return;
   }
   if (!text) {
@@ -1919,14 +1984,16 @@ async function sendLanMessage() {
     return;
   }
   setLanActionBusy(true);
+  setLanSendState("loading");
   try {
     await invoke("lan_send_message", { peerId: peer.id, text });
     lanMessageInput.value = "";
     lanMessageSignature = "";
+    setLanSendState("success");
     await refreshLan({ silent: true });
-    showToast(`消息已发给 ${lanPeerLabel(peer)}`, "success");
     lanMessageInput.focus();
   } catch (error) {
+    setLanSendState("idle");
     showToast(friendlyError(error), "error");
   } finally {
     setLanActionBusy(false);

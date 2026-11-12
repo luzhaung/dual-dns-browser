@@ -869,7 +869,7 @@ dependencies = [
 
 [[package]]
 name = "dual-dns-browser"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "base64 0.22.1",
  "objc2",

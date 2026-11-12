@@ -2272,6 +2272,37 @@ fn notify_lan_event(app: AppHandle, title: String, body: String) -> Result<(), S
         .map_err(|error| format!("发送系统通知失败: {error}"))
 }
 
+#[tauri::command]
+fn set_unread_badge(app: AppHandle, count: u32) -> Result<(), String> {
+    let count = count.min(999);
+    if let Some(window) = app.get_webview_window("main") {
+        window
+            .set_badge_count((count > 0).then_some(i64::from(count)))
+            .map_err(|error| format!("设置 Dock 未读角标失败: {error}"))?;
+    }
+
+    let state = app.state::<AppState>();
+    if let Some(tray) = state.tray.lock().unwrap().as_ref() {
+        let title = (count > 0).then(|| {
+            if count > 99 {
+                "99+".to_string()
+            } else {
+                count.to_string()
+            }
+        });
+        tray.set_title(title)
+            .map_err(|error| format!("设置菜单栏未读提示失败: {error}"))?;
+        let tooltip = if count > 0 {
+            format!("DualDNS Browser · {count} 条未读")
+        } else {
+            "DualDNS Browser".to_string()
+        };
+        tray.set_tooltip(Some(tooltip))
+            .map_err(|error| format!("设置托盘提示失败: {error}"))?;
+    }
+    Ok(())
+}
+
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -2394,7 +2425,8 @@ pub fn run() {
             lan_open_downloads,
             lan_probe_network_access,
             open_lan_privacy_settings,
-            notify_lan_event
+            notify_lan_event,
+            set_unread_badge
         ])
         .build(tauri::generate_context!())
         .expect("error while building DualDNS Browser");

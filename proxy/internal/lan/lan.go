@@ -32,7 +32,8 @@ const (
 	defaultUDPPort    = 18191
 	beaconInterval    = 3 * time.Second
 	registerInterval  = 15 * time.Second
-	peerOnlineWindow  = 12 * time.Second
+	heartbeatInterval = 10 * time.Second
+	peerOnlineWindow  = 35 * time.Second
 	peerKeepWindow    = 10 * time.Minute
 	maxMessages       = 300
 	maxMessageRunes   = 2000
@@ -647,7 +648,12 @@ func (s *Service) snapshot() map[string]any {
 		if peers[i].Online != peers[j].Online {
 			return peers[i].Online
 		}
-		return strings.ToLower(peers[i].Name) < strings.ToLower(peers[j].Name)
+		left := strings.ToLower(peers[i].Name)
+		right := strings.ToLower(peers[j].Name)
+		if left != right {
+			return left < right
+		}
+		return peers[i].ID < peers[j].ID
 	})
 	sort.Slice(outgoingOut, func(i, j int) bool { return outgoingOut[i].At > outgoingOut[j].At })
 	sort.Slice(incomingOut, func(i, j int) bool { return incomingOut[i].At > incomingOut[j].At })
@@ -1339,25 +1345,14 @@ func (s *Service) postToPeer(target peer, path string, payload []byte, timeout t
 	req.Header.Set("X-DDB-Token", target.Token)
 	resp, err := s.client.Do(req)
 	if err != nil {
-		s.markPeerOffline(target.ID)
 		return fmt.Errorf("发送失败，可能不在同一局域网或被防火墙拦截: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		reason := readErrorBody(resp)
-		s.markPeerOffline(target.ID)
 		return fmt.Errorf("对方拒绝: %s", reason)
 	}
 	return nil
-}
-
-func (s *Service) markPeerOffline(peerID string) {
-	s.mu.Lock()
-	if item, ok := s.peers[peerID]; ok {
-		item.LastSeen = 0
-		item.Online = false
-	}
-	s.mu.Unlock()
 }
 
 func (s *Service) startDiscovery() {
@@ -1478,6 +1473,7 @@ func (s *Service) absorbBeacon(item beacon, source net.IP) (bool, bool) {
 func (s *Service) beaconLoop() {
 	timer := time.NewTimer(200 * time.Millisecond)
 	defer timer.Stop()
+	lastHeartbeat := time.Time{}
 	for {
 		select {
 		case <-s.stopCh:
@@ -1485,8 +1481,41 @@ func (s *Service) beaconLoop() {
 		case <-timer.C:
 			s.broadcast()
 			s.prunePeers()
+			if time.Since(lastHeartbeat) >= heartbeatInterval {
+				lastHeartbeat = time.Now()
+				s.heartbeatPeers()
+			}
 			timer.Reset(beaconInterval)
 		}
+	}
+}
+
+// heartbeatPeers keeps known peers online over TCP. Windows Firewall commonly
+// drops inbound UDP broadcast, so discovery beacons alone make peers flap
+// between online and offline even though their HTTP service is reachable.
+func (s *Service) heartbeatPeers() {
+	s.mu.RLock()
+	targets := make([]beacon, 0, len(s.peers))
+	for _, item := range s.peers {
+		if item == nil || !validID(item.ID) || item.ID == s.id {
+			continue
+		}
+		if net.ParseIP(item.IP) == nil || item.Port < 1024 || item.Port > 65535 || len(item.Token) != 32 {
+			continue
+		}
+		targets = append(targets, s.peerBeacon(
+			item.ID,
+			item.Name,
+			item.IP,
+			item.Port,
+			item.Token,
+			item.Version,
+			item.Platform,
+		))
+	}
+	s.mu.RUnlock()
+	for _, target := range targets {
+		go s.registerPeerHTTP(target)
 	}
 }
 
@@ -1599,13 +1628,15 @@ func (s *Service) registerPeer(target beacon) {
 	if target.Port < 1024 || target.Port > 65535 || net.ParseIP(target.IP) == nil {
 		return
 	}
+	s.sendBeaconUDP(net.ParseIP(target.IP), s.ownBeaconFor(target.ID))
+	s.registerPeerHTTP(target)
+}
+
+func (s *Service) registerPeerHTTP(target beacon) {
 	payload, err := json.Marshal(s.ownBeaconFor(target.ID))
 	if err != nil {
 		return
 	}
-
-	s.sendBeaconUDP(net.ParseIP(target.IP), s.ownBeaconFor(target.ID))
-
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	url := fmt.Sprintf("http://%s:%d/__ddb/lan/register", target.IP, target.Port)

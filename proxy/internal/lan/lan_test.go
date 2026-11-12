@@ -3,6 +3,7 @@ package lan
 import (
 	"bytes"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -166,6 +167,60 @@ func addTestPeer(service *Service, id, name, ip, token string) {
 		Version:  "1.2.3",
 		Platform: "darwin",
 	}
+}
+
+func TestHeartbeatPeersRefreshesLastSeenOverHTTP(t *testing.T) {
+	const peerID = "11223344"
+	token := strings.Repeat("c", 32)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/__ddb/lan/register" {
+			http.NotFound(w, r)
+			return
+		}
+		port := r.Context().Value(http.LocalAddrContextKey).(net.Addr).(*net.TCPAddr).Port
+		_ = json.NewEncoder(w).Encode(beacon{
+			App:      appTag,
+			Version:  protoVersion,
+			ID:       peerID,
+			Name:     "同事的 Windows",
+			IP:       "127.0.0.1",
+			Port:     port,
+			Token:    token,
+			Release:  "1.2.10",
+			Platform: "windows",
+		})
+	}))
+	defer server.Close()
+	port := server.Listener.Addr().(*net.TCPAddr).Port
+
+	service, err := newService(t.TempDir(), defaultHTTPPort, defaultUDPPort, "test")
+	if err != nil {
+		t.Fatalf("newService: %v", err)
+	}
+	oldSeen := time.Now().Add(-time.Minute).UnixMilli()
+	service.mu.Lock()
+	service.peers[peerID] = &peer{
+		ID:       peerID,
+		Name:     "同事的 Windows",
+		IP:       "127.0.0.1",
+		Port:     port,
+		Token:    token,
+		LastSeen: oldSeen,
+	}
+	service.mu.Unlock()
+
+	service.heartbeatPeers()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		service.mu.RLock()
+		lastSeen := service.peers[peerID].LastSeen
+		service.mu.RUnlock()
+		if lastSeen > oldSeen {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("HTTP heartbeat did not refresh peer lastSeen")
 }
 
 func setTestPrivacy(t *testing.T, service *Service, private bool, ids ...string) {

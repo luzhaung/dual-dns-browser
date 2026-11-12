@@ -54,7 +54,7 @@
           title="检查更新"
         >
           <span class="version-dot" id="versionDot"></span>
-          <span id="versionLabel">v1.2.10</span>
+          <span id="versionLabel">v1.2.11</span>
           <svg class="version-refresh" viewBox="0 0 16 16" aria-hidden="true">
             <path
               d="M13 8a5 5 0 1 1-1.46-3.54M13 3v3.2H9.8"
@@ -455,7 +455,7 @@
                 <path d="M13.8 6.2 8.2 11.8a2.1 2.1 0 0 0 3 3l5.4-5.4a3.6 3.6 0 0 0-5.1-5.1L5.8 9.9a5 5 0 0 0 7.1 7.1l4.3-4.3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
             </button>
-            <button class="lan-send-btn" id="lanSendMessage" type="button">发送</button>
+            <button class="lan-send-btn" id="lanSendMessage" type="button" aria-label="发送消息">发送</button>
           </div>
         </section>
       </section>
@@ -561,10 +561,11 @@ const info = window.__DUALDNS_ENV__;
               <li>收到新消息或文件时，对应同事的名称旁会出现红色未读数字；打开该同事的聊天后自动清除。</li>
               <li>公司 Wi-Fi 开启 AP 隔离 / 客户端隔离时，设备之间无法互访，自动发现会失败；可以尝试让同事把 IP 发给你后手动添加。</li>
               <li>点击同事进入聊天后，消息和文件都在同一个时间线里。输入框右侧的回形针可以一次选择图片或文件发送，也可以直接把文件拖进窗口。</li>
+              <li>点击“发送”后，按钮会先显示加载动画，成功后切换为绿色对号，再恢复为“发送”；成功提示不再使用右下角弹窗打断操作。</li>
               <li>聊天输入框支持直接粘贴图片（⌘V / Ctrl+V），图片会在会话里显示缩略图，点击可以放大预览。</li>
               <li>收到的文件会先暂存，点“保存”后才会进入下载目录：macOS 为 <code>~/Downloads/DualDNS Transfers</code>，Windows 为 <code>%USERPROFILE%\Downloads\DualDNS Transfers</code>。保存或忽略后，这条文件消息仍会保留在当前会话里，直到你主动清空该会话。</li>
               <li>和某位同事有过消息或文件后，即使对方下线，他也会留在左侧列表并显示“离线”；点“清空当前会话”后才会从列表移除，已保存到下载目录的文件不会被删除。</li>
-              <li>收到新消息或文件时，系统会弹出通知；如果收不到通知，请在系统设置中允许 DualDNS Browser 发送通知。</li>
+              <li>收到新消息或文件时，系统会弹出通知，macOS 菜单栏图标和 Dock 图标会显示未读数字；打开对应电脑的聊天后自动清零。如果收不到通知，请在系统设置中允许 DualDNS Browser 发送通知。</li>
               <li>不想被同事看到时，可以打开“隐身模式”，只勾选允许发现你的电脑。隐身期间未勾选的设备完全看不到你，也不会显示成“离线”，同时不能给你发消息或传文件。</li>
               <li>想在自己的两台电脑之间互传：先让两台电脑正常发现对方，把对方加入隐身名单，再开启隐身。隐身期间不能手动添加新 IP，需要新增设备时先关闭隐身。</li>
               <li>单个文件最大 2 GB；文件越大，传输时间越长。传输出错时先确认双方仍在同一网络、应用未退出，并检查防火墙。</li>
@@ -894,7 +895,7 @@ const info = window.__DUALDNS_ENV__;
           <div class="update-toolbar">
             <div class="update-current">
               <span class="update-label">当前版本</span>
-              <strong id="updateCurrentVersion">v1.2.10</strong>
+              <strong id="updateCurrentVersion">v1.2.11</strong>
             </div>
             <label class="update-source" for="updateSource">
               <span class="update-label">更新源</span>
@@ -934,7 +935,7 @@ const info = window.__DUALDNS_ENV__;
             <div class="update-result-head">
               <div>
                 <span class="update-label">最新版本</span>
-                <strong id="updateLatest">v1.2.10</strong>
+                <strong id="updateLatest">v1.2.11</strong>
               </div>
               <span class="update-badge" id="updateBadge">有新版本</span>
             </div>

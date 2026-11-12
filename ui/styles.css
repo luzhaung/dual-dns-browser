@@ -2745,6 +2745,10 @@ html[data-platform="windows"] .toast {
 }
 
 .lan-send-btn {
+  display: inline-flex;
+  min-width: 64px;
+  align-items: center;
+  justify-content: center;
   flex: none;
   height: 34px;
   padding: 0 16px;
@@ -2755,11 +2759,53 @@ html[data-platform="windows"] .toast {
   font-size: 11.5px;
   font-weight: 620;
   cursor: pointer;
-  transition: opacity 150ms ease;
+  transition: opacity 150ms ease, background-color 180ms ease;
 }
 
 .lan-send-btn:hover {
   opacity: 0.9;
+}
+
+.lan-send-btn.loading,
+.lan-send-btn.loading:disabled {
+  background: var(--navy);
+  opacity: 1;
+}
+
+.lan-send-btn.success,
+.lan-send-btn.success:disabled {
+  background: #1f9d68;
+  opacity: 1;
+}
+
+.lan-send-btn svg {
+  width: 17px;
+  height: 17px;
+}
+
+.lan-send-btn .lan-send-spinner {
+  animation: lan-send-spin 720ms linear infinite;
+}
+
+.lan-send-btn.success svg {
+  animation: lan-send-pop 220ms ease-out;
+}
+
+@keyframes lan-send-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes lan-send-pop {
+  from {
+    opacity: 0.4;
+    transform: scale(0.62);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .lan-attach-btn {
